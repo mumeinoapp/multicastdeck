@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<title>MultiCastDeck</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="control-bar">
+    <div class="group" id="add-channel-group">
+      <select id="channel-platform-select" title="追加するチャンネルの配信サイト">
+        <option value="twitch">Twitch</option>
+        <option value="youtube">YouTube</option>
+        <option value="kick">Kick</option>
+      </select>
+      <input id="channel-input" type="text" placeholder="チャンネル名を入力（YouTubeは@ハンドル可、Kickはユーザー名）" />
+      <button id="add-channel-btn">追加</button>
+    </div>
+
+    <div id="channel-chips"></div>
+
+    <!-- 操作ボタン群。ドラッグで並び替え可能（順序は保存される）。
+         Pro機能ボタン（.pro-btn、PROバッジ付き）は右寄りに配置し、枠線とバッジで無料機能と
+         視覚的に分けている。Pro機能はpremiumUnlockedがfalseの間ロック表示になる
+         （applyPremiumLockUiStatesで制御。ロック中はクリックでアンロック案内を表示するのみ）。 -->
+    <div id="action-buttons">
+      <button id="drops-toggle-btn" class="action-btn" draggable="true" data-key="drops-toggle">Twitch Drops</button>
+      <button id="drops-progress-btn" class="action-btn" draggable="true" data-key="drops-progress" disabled>進捗を確認</button>
+      <button id="kick-drops-toggle-btn" class="action-btn" draggable="true" data-key="kick-drops-toggle" title="Kick公式のDrops&報酬ページをそのまま表示">Kick Drops</button>
+      <button id="emotes-btn" class="action-btn" draggable="true" data-key="emotes">⭐ スタンプ</button>
+      <button id="chat-integration-btn" class="action-btn" draggable="true" data-key="chat-integration">🗂 チャット統合</button>
+      <button id="layout-auto-arrange-btn" class="action-btn" draggable="true" data-key="auto-arrange" title="タイルの位置・サイズを自動整列でリセット">🔲 自動整列</button>
+      <button id="layout-share-btn" class="action-btn" draggable="true" data-key="layout-share" title="チャンネル構成・タイル配置をURLで共有">🔗 共有</button>
+      <button id="zapping-btn" class="action-btn pro-btn" draggable="true" data-key="zapping" data-pro-feature="true">🎲 ザッピング<span class="pro-badge">PRO</span></button>
+      <button id="unified-feed-btn" class="action-btn pro-btn" draggable="true" data-key="unified-feed" data-pro-feature="true" title="フォロー中/登録中で現在配信中の配信者一覧・自動追加設定">📡 配信チェック<span class="pro-badge">PRO</span></button>
+      <button id="settings-open-btn" class="action-btn" draggable="true" data-key="settings" title="設定">⚙ 設定</button>
+    </div>
+
+    <!-- 右端固定クラスタ（ドラッグ並び替え対象外）。縦3段で、一番下に常時表示の音量を置く。 -->
+    <div id="fixed-right-buttons">
+      <button id="account-login-close-btn" class="hidden">🔐 ログイン画面を閉じる</button>
+      <!-- Auto Tune-In用のTwitch OAuth連携画面（設定パネル内のボタンから開く）を閉じる／キャンセルする -->
+      <button id="twitch-auth-close-btn" class="hidden">🔐 連携をキャンセル</button>
+      <!-- 音量ミキサーはボタン直下に垂れるドロップダウンのため、実際の表示位置（画面右端基準）とズレないよう右端に配置 -->
+      <button id="volume-mixer-btn" title="配信ごとの音量調整">🔊 音量</button>
+    </div>
+  </header>
+
+  <!-- ヘッダー下の細い通知バー。Drops進捗・各種エラー通知など、以前はヘッダー内に表示していたものをここに集約 -->
+  <div id="status-bar"><span id="drops-progress-result"></span></div>
+
+  <div id="emotes-panel" class="hidden">
+    <div class="panel-content">
+      <div class="panel-header">
+        <h3>スタンプ（エモート）一覧</h3>
+        <button id="emotes-close-btn">×</button>
+      </div>
+      <p class="note">お気に入りはワンクリックでチャット欄へ挿入、それ以外はクリックでコード名をコピーします。詳細は「使い方/注記」参照。</p>
+      <div class="group">
+        <select id="emotes-channel-select"></select>
+        <button id="emotes-fetch-btn">取得</button>
+      </div>
+      <div id="emotes-status" class="note"></div>
+      <h4>お気に入り</h4>
+      <div id="favorites-grid" class="emote-grid"></div>
+      <h4>取得結果</h4>
+      <div id="emotes-grid" class="emote-grid"></div>
+    </div>
+  </div>
+
+  <!-- 音量ミキサーは「🔊 音量」ボタン直下に垂れるドロップダウン形式（ヘッダーボタンの再クリック、
+       またはドロップダウン外側のクリックで閉じる。専用の閉じるボタンは持たない）。 -->
+  <div id="volume-mixer-panel" class="hidden">
+    <div id="volume-mixer-list"></div>
+  </div>
+
+  <div id="layout-share-panel" class="hidden">
+    <div class="panel-content">
+      <div class="panel-header">
+        <h3>🔗 レイアウトをURLで共有</h3>
+        <button id="layout-share-close-btn">×</button>
+      </div>
+      <p class="note">個人設定・APIキーは含まれません。</p>
+      <div class="group">
+        <button id="layout-share-generate-btn">現在の構成からURLを生成</button>
+      </div>
+      <div class="group">
+        <input id="layout-share-output" type="text" readonly placeholder="ここにURLが表示されます" />
+        <button id="layout-share-copy-btn">コピー</button>
+      </div>
+      <div class="settings-divider"></div>
+      <p class="note">読み込むと<strong>現在開いているチャンネルはすべて置き換わります</strong>（元に戻せません）。</p>
+      <div class="group">
+        <input id="layout-share-input" type="text" placeholder="共有されたURLを貼り付け" />
+        <button id="layout-share-import-btn">読み込む</button>
+      </div>
+      <div id="layout-share-status" class="note"></div>
+    </div>
+  </div>
+
+  <div id="chat-integration-panel" class="hidden">
+    <div class="panel-header">
+      <h3>🗂 チャット統合</h3>
+      <button id="chat-integration-close-btn">×</button>
+    </div>
+    <div class="chat-integration-mode-switch">
+      <button id="chat-integration-mode-tab-btn" class="active">タブ</button>
+      <button id="chat-integration-mode-timeline-btn" data-pro-feature="true">全タブ統合<span class="pro-badge">PRO</span></button>
+    </div>
+    <div id="chat-integration-tabs" class="chat-integration-tabs"></div>
+    <div id="chat-integration-timeline" class="chat-integration-timeline hidden"></div>
+    <div id="chat-integration-send-row" class="chat-integration-send-row hidden">
+      <input id="chat-integration-send-input" type="text" placeholder="上のタブで選択中のチャンネルへ送信" />
+      <button id="chat-integration-send-btn">送信</button>
+    </div>
+  </div>
+
+  <div id="zapping-modal" class="hidden">
+    <div class="modal-content">
+      <h2>🎲 ランダム自動切換え（ザッピング）</h2>
+      <p class="note">10〜30秒間隔で自動切換え。すべて空欄で条件なしで開始できます。詳細は「使い方/注記」参照。</p>
+      <div class="group">
+        <span class="field-label">対象</span>
+        <select id="zapping-platform-select">
+          <option value="twitch">Twitch</option>
+          <option value="youtube">YouTube（β版）</option>
+          <option value="kick">Kick</option>
+        </select>
+      </div>
+      <p id="zapping-youtube-note" class="note hidden">
+        ※YouTube版はβ版・非公式方式のため言語での絞り込みは非対応です。
+      </p>
+      <p id="zapping-kick-note" class="note hidden">
+        ※Kick版は設定画面のKick Client ID / Client Secretが必要です（ログイン不要）。ゲーム名欄にはKickのカテゴリ名を入力してください。
+      </p>
+      <label id="zapping-language-label">言語（例: ja / en、空欄で指定なし）</label>
+      <input id="zapping-language-input" type="text" placeholder="例: ja" />
+      <label>ゲーム名（空欄で指定なし）</label>
+      <input id="zapping-game-input" type="text" placeholder="例: Apex Legends" />
+      <label>タグ（カンマ区切り、ゆるい部分一致・空欄で指定なし）</label>
+      <input id="zapping-tags-input" type="text" placeholder="例: 初見歓迎, FPS" />
+      <div id="zapping-status" class="note"></div>
+      <div class="modal-actions">
+        <button id="zapping-start-btn">開始</button>
+        <button id="zapping-skip-btn" disabled>次へ</button>
+        <button id="zapping-stop-btn" disabled>停止</button>
+      </div>
+      <div class="modal-actions">
+        <button id="zapping-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="unified-feed-modal" class="hidden">
+    <div class="modal-content">
+      <h2>📡 配信チェック</h2>
+      <p class="note">フォロー中/登録中で現在配信中のチャンネル一覧です（手動更新のみ）。詳細は「使い方/注記」参照。</p>
+      <div class="modal-actions">
+        <button id="unified-feed-refresh-btn">🔄 更新</button>
+        <span id="unified-feed-updated-at" class="note"></span>
+      </div>
+      <div class="group" id="unified-feed-filter-group">
+        <button class="unified-feed-filter-btn active" data-platform="all">すべて</button>
+        <button class="unified-feed-filter-btn" data-platform="twitch">Twitch</button>
+        <button class="unified-feed-filter-btn" data-platform="youtube">YouTube</button>
+        <button class="unified-feed-filter-btn" data-platform="kick">Kick</button>
+      </div>
+      <div id="unified-feed-status" class="note"></div>
+      <div id="unified-feed-list"></div>
+
+      <div class="settings-divider"></div>
+
+      <h3>自動追加の対象を選ぶ</h3>
+      <p class="note">チェックした配信者のみが自動追加の対象になります（YouTubeは必須）。詳細は「使い方/注記」参照。</p>
+      <button id="auto-tune-in-load-all-btn">🔄 全フォロー/登録一覧を読み込む</button>
+      <div id="auto-tune-in-all-status" class="note"></div>
+      <div id="auto-tune-in-all-list"></div>
+
+      <div class="settings-divider"></div>
+
+      <h3>フォロー配信者の自動追加</h3>
+      <p class="note">配信開始で自動追加、終了で自動削除します（60秒間隔）。Twitchアカウント連携が必要です。</p>
+      <div class="account-row">
+        <span id="auto-tune-in-status-dot" class="status-dot unknown"></span>
+        <span id="auto-tune-in-status" class="account-name"></span>
+        <div class="auto-tune-in-actions">
+          <button id="auto-tune-in-connect-btn">Twitchアカウントと連携する</button>
+          <button id="auto-tune-in-disconnect-btn" class="hidden">連携解除</button>
+        </div>
+      </div>
+      <div id="auto-tune-in-message" class="note"></div>
+      <label class="checkbox-row">
+        <input id="auto-tune-in-enabled-input" type="checkbox" disabled />
+        フォロー配信者の自動追加を有効にする
+      </label>
+      <div class="group">
+        <span class="field-label">上限タイル数</span>
+        <input id="auto-tune-in-max-input" class="max-tiles-input" type="number" min="1" max="20" value="4" disabled />
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <h3>Drops自動追加/削除</h3>
+      <p class="note">指定ゲームの配信中チャンネルを自動追加/削除します（60秒間隔）。詳細は「使い方/注記」参照。</p>
+      <div id="drops-auto-list"></div>
+      <div class="group drops-auto-add-row">
+        <input id="drops-auto-game-input" type="text" placeholder="ゲーム名（例: Apex Legends）" />
+        <input id="drops-auto-max-input" type="number" min="1" max="20" value="3" placeholder="上限" />
+        <button id="drops-auto-add-btn">追加</button>
+      </div>
+      <div id="drops-auto-status" class="note"></div>
+
+      <div class="modal-actions">
+        <button id="unified-feed-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 「使い方/注記」統合ヘルプ画面。旧・注記モーダルを発展させたもの。画面中央に最前面表示し、
+       各パネルにあった長い個別説明文はここに集約している（各パネル側は要点のみの短い注記に整理済み）。 -->
+  <div id="help-modal" class="hidden">
+    <div class="modal-content help-modal-content">
+      <h2>📖 使い方 / 注記</h2>
+      <div class="help-tabs">
+        <button class="help-tab-btn active" data-help-tab="general">全般</button>
+        <button class="help-tab-btn" data-help-tab="twitch">Twitch</button>
+        <button class="help-tab-btn" data-help-tab="youtube">YouTube</button>
+        <button class="help-tab-btn" data-help-tab="kick">Kick</button>
+        <button class="help-tab-btn" data-help-tab="premium">有料機能</button>
+      </div>
+
+      <div class="help-tab-content" data-help-content="general">
+        <h3>基本操作</h3>
+        <ul>
+          <li>配信・チャットの画面（タイル）はどこをクリックしてもドラッグで移動でき、タイル外周付近から辺リサイズができます。「🔲 自動整列」でグリッド配置に戻せます。</li>
+          <li>各種パネル（スタンプ・ザッピング・音量・設定・チャット統合・配信チェック等）は開いていても配信画面を消さず、複数同時に開けます。Escapeキーでも閉じられます。</li>
+          <li>ヘッダーの操作ボタン（Twitch Drops・スタンプ・チャット統合・ザッピング・配信チェック等）は、ボタン自体をドラッグすることで並び順を自由に入れ替えられます。入れ替えた順序は次回起動時にも保存されます。</li>
+          <li>「🔗 共有」で現在のチャンネル構成・タイル配置をURLとして書き出し/取り込みできます（個人設定・APIキー等は含みません）。</li>
+        </ul>
+        <h3>免責事項</h3>
+        <ul>
+          <li>Drops進捗表示・各種フォロー/登録一覧の取得などは<strong>非公式機能</strong>です。各配信サイト側の仕様変更により、予告なく動作を停止・変更する場合があります。</li>
+          <li>これらの機能は自己責任でのご利用をお願いします。開発者は動作の継続性を保証しません。</li>
+          <li>Dropsインベントリの詳細画面はTwitch/Kickそれぞれの公式ページをそのまま表示しています（外枠のみ独自デザイン）。Kick版は進捗の自動読み取りには対応していません。</li>
+          <li>決済（サブスク購入等）は配信サイト自体に関するものは本ツール内では一切処理せず、すべて各社公式UIに委譲しています。</li>
+        </ul>
+      </div>
+
+      <div class="help-tab-content hidden" data-help-content="twitch">
+        <h3>Twitch対応について</h3>
+        <ul>
+          <li>視聴・チャット埋め込みはTwitch公式の埋め込みプレイヤー/チャットを使用しています。</li>
+          <li>「⭐ スタンプ」はTwitch Helix API（無料・Client Credentials方式、設定画面でClient ID/Secretが必要）でチャンネル固有＋グローバルエモートを取得します。お気に入り登録したスタンプはワンクリックでチャット欄へ挿入されます（お気に入り以外はコード名のコピー）。チャンネル固有スタンプのうち<strong>サブスク限定（そのチャンネルにサブスクしていないと使えないもの）</strong>には専用バッジが付きます。</li>
+          <li>Drops進捗確認は「確認操作をした時だけ」DOM読み取りを行う非公式機能です（常時監視はしません）。</li>
+          <li>🎲 ザッピング（Twitch版）は<code>/helix/streams</code>（無料API）で言語・ゲーム名・タグを厳密に絞り込めます。</li>
+        </ul>
+      </div>
+
+      <div class="help-tab-content hidden" data-help-content="youtube">
+        <h3>YouTube対応について（既知の制約）</h3>
+        <ul>
+          <li>チャンネルの追加は「配信URLの直接貼り付け」または「@ハンドル指定」に対応しています。@ハンドル指定は、YouTube公式APIではなく<strong>非公式のページ判定（youtube.com/@handle/live の内容確認）</strong>で現在配信中の動画を探すため、YouTube側のページ構造が変わると動かなくなる可能性があります。</li>
+          <li>動画URLを直接貼り付けて追加した場合、その配信が終了すると再度URLを貼り直す必要があります（自動で次の配信には切り替わりません）。</li>
+          <li>チャット統合の「タブ」モードはYouTube公式のライブチャット埋め込みをそのまま使用しています。「全タブ統合」モードは、YouTube側に無料で使える公開チャットプロトコルが無いため、ライブチャット埋め込みページを裏で読み込みチャット内容を画面から読み取る<strong>非公式の方式</strong>で実現しています（この裏読み込みはパネルを開いている間だけ動作し、閉じると自動的に停止します）。</li>
+          <li>音量調整・タイルのドラッグ移動/リサイズはYouTube埋め込みの構造上、Twitchと全く同じ操作感にはできません（映像の縁（外周付近）からのみ移動・リサイズ操作が可能です）。</li>
+          <li>「📡 配信チェック」でのYouTube登録チャンネル一覧は、YouTube公式APIではなく<strong>ログイン済みセッションでの登録チャンネルページの内容確認（非公式）</strong>で取得しています。アプリ内でYouTubeにログインしていない場合はYouTube分は表示されません。</li>
+          <li>「🎲 ザッピング」のYouTube版は<strong>β版</strong>です。TwitchのようなAPIによる厳密な言語/ゲーム絞り込みには対応していません。YouTube公式のライブ配信一覧・検索ページを読み取る<strong>非公式の方式</strong>で、言語での絞り込みは非対応、ゲーム名・タグは動画タイトル/チャンネル名への部分一致によるゆるい絞り込みです。</li>
+          <li>YouTube Data APIキーの設定欄は現状使用していません（将来の機能拡張用に残しています）。</li>
+        </ul>
+      </div>
+
+      <div class="help-tab-content hidden" data-help-content="kick">
+        <h3>Kick対応について（現時点のスコープ）</h3>
+        <ul>
+          <li>チャンネルの追加・視聴はKick公式の埋め込みプレイヤー（player.kick.com）を使用しており、視聴自体はログイン不要です。</li>
+          <li>「Kickアカウント連携」（設定画面）はOAuth 2.1（PKCE）による公式連携で、連携済みかどうかの確認・接続/切断のみを行います。連携してもタイル追加等の自動化は行いません。</li>
+          <li>「📡 配信チェック」の統一フィードはKickにも対応していますが、フォロー中一覧はKick公式APIには存在しないため<strong>kick.com自身の非公式エンドポイント（Cookieセッション経由）を使う非公式の方式</strong>です。事前に設定画面のKickアカウント行からログインしておく必要があります。</li>
+          <li>Kick版Dropsは公式のDrops&報酬ページをそのまま表示するのみで、進捗の自動読み取りには対応していません。</li>
+          <li>🎲 ザッピング（Kick版）はKick公式Public APIを使用します。設定画面のKick Client ID/Secretが未設定の場合は開始できません（ログイン状態は不要、アプリ登録のみで動作）。</li>
+          <li><strong>フォロー配信者の自動追加（Auto Tune-In）はKickでは今回未対応です。</strong>60秒間隔の常時ポーリングが必要になるため、Kickの取得方式（隠しブラウザでのページ読み込みを伴う重い処理）を常時実行するのは負荷・Bot対策リスクの面で見送っています。</li>
+        </ul>
+      </div>
+
+      <div class="help-tab-content hidden" data-help-content="premium">
+        <h3>有料機能（Pro機能）について</h3>
+        <p class="note">
+          基本無料＋一部機能を有料解除する方針です。以下の機能は<strong>Proプラン加入者のみ</strong>利用できます
+          （未加入の場合はボタンがロック表示になります）。設定画面の「Pro会員登録」からメールアドレスでログインし、加入状況の反映・お申し込み（購入）ができます。
+        </p>
+        <ul>
+          <li>📡 配信チェック（統一フィード・フォロー配信者の自動追加）</li>
+          <li>🗂 チャット統合の「全タブ統合」モード</li>
+          <li>🎲 ザッピング（ランダム自動切換え）</li>
+          <li>Drops自動追加/削除</li>
+        </ul>
+        <p class="note">上記以外の機能（複数配信の同時視聴、チャット統合の「タブ」モード、スタンプ、個別音量調整、レイアウトのURL共有など）は今後も無料でご利用いただけます。</p>
+      </div>
+
+      <button id="help-close-btn">閉じる</button>
+    </div>
+  </div>
+
+  <!-- Pro機能（ロック中）をクリックした際の案内モーダル。決済基盤は準備中のため、現時点では
+       案内表示のみ（実際のアンロック導線は決済基盤の実装後に追加）。 -->
+  <div id="premium-locked-modal" class="hidden">
+    <div class="modal-content">
+      <h2>🔒 Pro機能</h2>
+      <p class="note">この機能はProプラン加入者向けの有料機能です。設定画面の「Pro会員登録」からログインし、加入状況の反映・お申し込み（購入）ができます。詳しくは「使い方/注記」の「有料機能」タブをご覧ください。</p>
+      <div class="modal-actions">
+        <button id="premium-locked-open-help-btn">使い方/注記を見る</button>
+        <button id="premium-locked-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 初回起動時に自動表示する案内ポップアップ。要点のみ端的に表示し、「使い方/注記」への導線を示す。
+       ヘルプメニュー「初回案内をもう一度見る」からも再表示できる。 -->
+  <div id="welcome-modal" class="hidden">
+    <div class="modal-content welcome-modal-content">
+      <h2>👋 はじめに</h2>
+      <p class="note">
+        このアプリには非公式機能（Drops進捗確認・各種フォロー一覧の取得など）が含まれ、配信サイト側の仕様変更で
+        動作しなくなる場合があります。ご利用前に「使い方/注記」で各機能の詳細・既知の制約をご確認ください。
+      </p>
+      <ul>
+        <li>📡 配信チェック・🗂 全タブ統合・🎲 ザッピング・Drops自動追加/削除は<strong>Pro機能（有料）</strong>です。</li>
+        <li>それ以外の複数配信の同時視聴・チャット統合（タブ）・スタンプ・個別音量調整などは無料でご利用いただけます。</li>
+      </ul>
+      <div class="modal-actions">
+        <button id="welcome-open-help-btn">使い方/注記を見る</button>
+        <button id="welcome-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings-modal" class="hidden">
+    <div class="modal-content">
+      <h2>設定</h2>
+
+      <h3>アップデート</h3>
+      <p class="note">現在のバージョン: <span id="updater-current-version">-</span></p>
+      <button id="updater-check-btn">アップデートを確認</button>
+      <div id="updater-message" class="note"></div>
+      <button id="updater-install-btn" class="hidden">今すぐ更新して再起動</button>
+
+      <div class="settings-divider"></div>
+
+      <label>Twitch embed parentドメイン</label>
+      <input id="parent-domain-input" type="text" placeholder="例: localhost / yourapp.example.com" />
+      <p class="note">配信・チャット埋め込みの<code>parent</code>パラメータです。配布時は実際のアプリのドメイン（またはElectronのビルド設定に応じた値）に変更してください。</p>
+
+      <label>レイアウト列数（0 = 自動）</label>
+      <input id="layout-columns-input" type="number" min="0" max="8" />
+
+      <label>Twitch Helix Client ID</label>
+      <input id="helix-client-id-input" type="text" placeholder="dev.twitch.tv/console/apps で無料取得" />
+
+      <label>Twitch Helix Client Secret</label>
+      <input id="helix-client-secret-input" type="password" />
+
+      <label>YouTube Data API キー</label>
+      <input id="youtube-api-key-input" type="password" placeholder="console.cloud.google.com で無料発行" />
+      <p class="note">現在は未使用です（将来の拡張用）。YouTubeの仕様等は「使い方/注記」参照。</p>
+
+      <label>Kick Client ID</label>
+      <input id="kick-client-id-input" type="text" placeholder="kick.com/settings/developer で登録して取得" />
+
+      <label>Kick Client Secret</label>
+      <input id="kick-client-secret-input" type="password" />
+      <p class="note">
+        Kick Developer Portalでアプリ登録し、Redirect URIに<code>http://localhost:17655/callback</code>を追加してください。
+        Kickの対応範囲は「使い方/注記」参照。
+      </p>
+
+      <div class="settings-divider"></div>
+
+      <h3>Pro会員登録</h3>
+      <p class="note">メールアドレスとパスワード不要の確認コードでログインします。ログインすると加入状況（Pro機能のアンロック）が自動反映されます。ログイン後、下部からお申し込み（購入）ができます。</p>
+
+      <label>決済バックエンドURL</label>
+      <input id="pro-auth-backend-url-input" type="text" placeholder="例: https://multistream-payment-backend.xxxx.workers.dev" />
+
+      <div id="pro-auth-logged-out-area">
+        <label>メールアドレス</label>
+        <input id="pro-auth-email-input" type="email" placeholder="you@example.com" />
+        <button id="pro-auth-request-code-btn">確認コードを送信</button>
+
+        <label>確認コード（6桁）</label>
+        <input id="pro-auth-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="123456" />
+        <button id="pro-auth-verify-code-btn">コードを確認してログイン</button>
+      </div>
+
+      <div id="pro-auth-logged-in-area" class="hidden">
+        <p class="note">ログイン中: <span id="pro-auth-logged-in-email"></span></p>
+        <p class="note">Pro状態: <span id="pro-auth-status-text"></span></p>
+        <button id="pro-auth-refresh-status-btn">最新の状態に更新</button>
+        <button id="pro-auth-logout-btn">ログアウト</button>
+
+        <div id="pro-checkout-area">
+          <p class="note">
+            お申し込み（決済ページはブラウザで開きます）。
+            カードは毎月自動更新、それ以外（銀行振込・PayPay）は選んだ期間分の1回払いです。
+          </p>
+
+          <button id="pro-checkout-card-btn">カードで購入（月額・自動更新）</button>
+
+          <label>期間を選んで購入（銀行振込・PayPay）</label>
+          <select id="pro-checkout-months-select">
+            <option value="1">1か月</option>
+            <option value="6">6か月（10%引き）</option>
+            <option value="12">12か月（20%引き）</option>
+          </select>
+          <button id="pro-checkout-other-btn">選んだ期間で購入</button>
+        </div>
+      </div>
+
+      <div id="pro-auth-message" class="note"></div>
+
+      <div class="settings-divider"></div>
+
+      <h3>アカウント連携</h3>
+      <p class="note">ログインしておくと配信タイル・Dropsなどにもログイン状態が引き継がれます。</p>
+      <div id="account-list"></div>
+      <div id="kick-auth-message" class="note"></div>
+      <button id="verify-accounts-btn">ログイン状況を確認</button>
+      <div id="verify-accounts-status" class="note"></div>
+
+      <div class="modal-actions">
+        <button id="settings-save-btn">保存</button>
+        <button id="settings-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 配信・チャットはメインプロセスのBrowserViewがこの領域に重なって描画される。
+       タイルのドラッグ移動・端リサイズはBrowserView側に注入したプリロードが処理するため、
+       ここには枠・ハンドル等のHTML要素は不要。 -->
+  <main id="view-area"></main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

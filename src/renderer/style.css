@@ -1,0 +1,1133 @@
+* { box-sizing: border-box; }
+
+/* 汎用の非表示クラス。ボタン類（ログイン画面を閉じる/連携をキャンセル/連携する・解除等）はこれで
+   表示切り替えしているが、これまで各パネル専用の `#id.hidden` ルールしか無く、汎用ルールが
+   存在しなかったため実際には隠れていなかった（表示中の連携する/解除ボタンが同時に出てしまう等の
+   不具合の原因）。他の `#foo.hidden` は詳細度で問題なく共存できるためそのまま残している。 */
+.hidden {
+  display: none !important;
+}
+
+:root {
+  /* #control-bar (84px) + #status-bar (22px)。main.jsのHEADER_HEIGHTと一致させること。 */
+  --header-height: 106px;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "Yu Gothic", sans-serif;
+  background: #18181b;
+  color: #efeff1;
+  overflow: hidden;
+}
+
+/* サイドパネル（.modal-content を使わないスタンプ/共有/チャット統合パネル等）でも
+   説明文の文字サイズが小さすぎないよう、汎用ルールとして定義しておく
+   （.modal-content .note と揃えたサイズ）。 */
+.note {
+  font-size: 13px;
+  color: #aaa;
+  line-height: 1.6;
+}
+
+/* コンテンツを上詰めにし、下の境界線と被らないよう下側にだけ余白を残す
+   （以前はalign-items:centerで上下均等の余白になっていたが、上側の余白が目立って見えるとの
+   指摘を受けて上詰めに変更）。 */
+#control-bar {
+  height: 84px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 6px 12px 8px;
+  background: #1f1f23;
+  border-bottom: 1px solid #303038;
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* チャンネル名入力＋追加ボタンは常に左端固定。右のチップ欄（2行ぶんの高さ）と
+   縦の中心が揃うよう、この項目だけ自身をコンテナ内で中央寄せする
+   （コンテナ全体はalign-items:flex-startで上詰めのため、ここだけ上書き）。 */
+#add-channel-group {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* チャンネルチップ欄。2行×2列ぶんの幅で固定し、それ以上は横スクロール（列単位）で表示する。
+   チップ本体の幅もチップ名を固定幅にしたことで揃うため、常におよそ2列分の幅で収まる
+   （幅を可変にしていた頃は空きスペースが右の操作ボタンとの間に生まれていたが、固定幅化で解消）。 */
+#channel-chips {
+  flex-shrink: 0;
+  width: 312px;
+  height: 100%;
+  display: grid;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  align-content: start;
+  gap: 6px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  /* 横スクロールバー分の高さをチップの行と競合させないよう、下側にあらかじめ確保しておく
+   （scrollbar-widthを指定していてもレイアウト上の占有幅までは自動確保されないブラウザがあり、
+   確保しないとチップ名とスクロールバーが重なって見える不具合が起きていたため明示的に padding-bottom を取る）。 */
+  padding-bottom: 8px;
+}
+
+#channel-chips::-webkit-scrollbar {
+  height: 6px;
+}
+
+#channel-chips::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#channel-chips::-webkit-scrollbar-thumb {
+  background: #46464f;
+  border-radius: 3px;
+}
+
+/* 操作ボタン群。2行×5列のグリッドで、HTML記載順に上段→下段の順に詰まる
+   （上段=視聴コンテンツ系、下段=運用・設定系のカテゴリ分け。ドラッグ&ドロップで並び替え可能、renderer.js参照）。
+   将来の有料機能はこの並びの右寄りに追加していく想定（無料機能を左、有料機能を右にする方針）。
+   列数はボタン総数(9個)÷2を切り上げた値に合わせている。ボタンの増減時はここも調整すること
+   （固定2行を保つため、列数 = ceil(ボタン総数 / 2)。ここを更新し忘れると3行目にはみ出す）。 */
+#action-buttons {
+  flex-shrink: 0;
+  height: 100%;
+  display: grid;
+  grid-template-columns: repeat(5, max-content);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: row;
+  align-content: start;
+  gap: 4px 6px;
+}
+
+.action-btn {
+  cursor: grab;
+  white-space: nowrap;
+}
+
+.action-btn.dragging {
+  opacity: 0.4;
+}
+
+.action-btn.drag-over {
+  outline: 2px dashed #9147ff;
+}
+
+.pro-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 4px;
+  font-size: 9px;
+  font-weight: bold;
+  border-radius: 3px;
+  background: #d9a441;
+  color: #1f1f23;
+  vertical-align: middle;
+}
+
+.action-btn.pro-btn {
+  border: 1px solid #d9a441;
+}
+
+/* premiumUnlockedがfalseの間、Pro機能ボタンに適用するロック状態の見た目 */
+.action-btn.pro-btn.locked,
+.chat-integration-mode-switch button.locked {
+  opacity: 0.6;
+}
+
+.action-btn.pro-btn.locked::before,
+.chat-integration-mode-switch button.locked::before {
+  content: '🔒 ';
+}
+
+/* 右端固定クラスタ（ログイン画面を閉じる・連携をキャンセル・音量）。並び替え対象外で常に右端、縦3段固定
+   （一番下が常時表示の音量、上2つは状況に応じて表示）。ヘッダーの高さ(80px)に収まるよう小さめにしている。 */
+#fixed-right-buttons {
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: 3px;
+  margin-left: auto;
+}
+
+#fixed-right-buttons button {
+  white-space: nowrap;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+/* ヘッダー下の細い通知バー（Drops進捗など） */
+#status-bar {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: #1a1a1e;
+  border-bottom: 1px solid #303038;
+}
+
+input[type="text"] {
+  background: #2c2c35;
+  border: 1px solid #3a3a45;
+  color: #efeff1;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+
+button {
+  background: #9147ff;
+  border: none;
+  color: white;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button:disabled {
+  background: #4a4a55;
+  cursor: not-allowed;
+}
+
+button:hover:not(:disabled) {
+  background: #772ce8;
+}
+
+.chip {
+  background: #2c2c35;
+  border-radius: 12px;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+/* チャンネル名は固定幅にして、アイコン類（ミュート等）が押し出されて隠れないようにする。
+   全部入りきらない名前は省略表示にし、チップにカーソルを合わせている間だけ枠内でスライド表示する。 */
+.chip-name-wrap {
+  width: 58px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.chip-name {
+  display: inline-block;
+  white-space: nowrap;
+  transform: translateX(0);
+}
+
+.chip-name-wrap.overflowing .chip-name {
+  transition: transform linear;
+}
+
+.chip:hover .chip-name-wrap.overflowing .chip-name {
+  transform: translateX(var(--marquee-offset, 0px));
+}
+
+.chip.dragging {
+  opacity: 0.4;
+}
+
+.chip.drag-over {
+  outline: 2px dashed #9147ff;
+}
+
+.chip .remove {
+  cursor: pointer;
+  color: #ff5c5c;
+}
+
+.chip .chat-toggle {
+  cursor: pointer;
+  opacity: 0.55;
+  font-size: 11px;
+}
+
+.chip .chat-toggle.active {
+  opacity: 1;
+}
+
+#drops-progress-result {
+  font-size: 12px;
+  color: #adadb8;
+  /* #status-bar は高さ固定（main.jsのHEADER_HEIGHTと同期必須）のため折り返しはできない。
+     その代わり横幅は#status-bar全体まで使い、hoverで全文をネイティブツールチップ表示する
+     （setStatusBannerでtitle属性にも同じ文字列を設定）。 */
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#view-area {
+  position: absolute;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* 実際の描画は BrowserView がこの領域に重なって行う */
+}
+
+#help-modal.hidden, #welcome-modal.hidden, #premium-locked-modal.hidden { display: none; }
+
+#help-modal, #welcome-modal, #premium-locked-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200; /* 何よりも最前面に表示する */
+}
+
+.help-modal-content {
+  max-width: 640px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.help-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0 16px;
+  flex-wrap: wrap;
+}
+
+.help-tab-btn {
+  background: #2c2c35;
+  border: 1px solid #3a3a45;
+  color: #ccc;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.help-tab-btn.active {
+  background: #6441a5;
+  border-color: #6441a5;
+  color: #fff;
+}
+
+.help-tab-content.hidden { display: none; }
+
+.help-tab-content h3 {
+  margin-top: 0;
+  font-size: 16px;
+}
+
+.welcome-modal-content {
+  max-width: 460px;
+}
+
+#settings-modal.hidden { display: none; }
+
+/* 設定パネルは、配信を表示したまま操作できるよう右側のサイドパネル形式にしている
+   （旧: 画面全体を暗くする中央モーダル。ユーザー要望により変更）。 */
+#settings-modal {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  background: #1f1f23;
+  border-left: 1px solid #303038;
+  z-index: 1000;
+  overflow-y: auto;
+}
+
+#settings-modal .modal-content {
+  max-height: none;
+  background: transparent;
+  padding: 16px;
+  border-radius: 0;
+  max-width: none;
+}
+
+.modal-content {
+  background: #1f1f23;
+  padding: 24px;
+  border-radius: 8px;
+  max-width: 480px;
+}
+
+.modal-content li {
+  margin-bottom: 10px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.modal-content label {
+  display: block;
+  margin-top: 12px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: #ccc;
+}
+
+.modal-content input {
+  width: 100%;
+  background: #2c2c35;
+  border: 1px solid #3a3a45;
+  color: #fff;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.modal-content .note {
+  font-size: 13px;
+  color: #aaa;
+  line-height: 1.6;
+}
+
+/* 「使い方/注記」画面は他パネルの補助テキストより読ませる比重が高いため、一回り大きめにする */
+.help-tab-content li,
+.help-tab-content p.note {
+  font-size: 15px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.modal-actions button {
+  flex: 1;
+}
+
+#emotes-panel {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 360px;
+  background: #1f1f23;
+  border-left: 1px solid #303038;
+  z-index: 900;
+  overflow-y: auto;
+}
+
+#emotes-panel.hidden { display: none; }
+
+/* ---- レイアウトのURL共有 ---- */
+
+#layout-share-panel {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  background: #1f1f23;
+  border-left: 1px solid #303038;
+  z-index: 900;
+  overflow-y: auto;
+}
+
+#layout-share-panel.hidden { display: none; }
+
+#layout-share-panel .group {
+  margin-top: 8px;
+}
+
+#layout-share-output,
+#layout-share-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.panel-content { padding: 14px; }
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-header button {
+  background: transparent;
+  font-size: 18px;
+}
+
+.emote-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* 「まだお気に入りはありません」等の空状態メッセージは、グリッドの最初の1列だけに
+   押し込まれて無駄に折り返されないよう、全列分の幅を使わせる */
+.emote-grid > .note {
+  grid-column: 1 / -1;
+}
+
+.emote-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: #2c2c35;
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+  font-size: 10px;
+  text-align: center;
+}
+
+.emote-cell img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.emote-cell.favorited {
+  border: 1px solid #9147ff;
+}
+
+/* サブスク限定スタンプ（Twitchチャンネル側の仕組み。アプリのProプランとは無関係）の視覚的区別。
+   無料スタンプとの見分けがつかないという指摘を受けて追加した、枠色＋鍵バッジの表示。 */
+.emote-cell.sub-only {
+  border: 1px solid #d9a441;
+}
+
+.emote-img-wrap {
+  position: relative;
+  width: 32px;
+  height: 32px;
+}
+
+.sub-only-badge {
+  position: absolute;
+  bottom: -4px;
+  right: -8px;
+  background: #d9a441;
+  color: #1f1f23;
+  font-size: 8px;
+  font-weight: bold;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+#emotes-channel-select {
+  background: #2c2c35;
+  border: 1px solid #3a3a45;
+  color: #fff;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+.settings-divider {
+  border-top: 1px solid #303038;
+  margin: 18px 0 10px;
+}
+
+#account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.account-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  background: #2c2c35;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.account-row button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #888; /* unknown */
+  flex-shrink: 0;
+}
+
+.status-dot.connected { background: #3fd15a; }
+.status-dot.disconnected { background: #ff5c5c; }
+.status-dot.unknown { background: #888; }
+
+.status-label {
+  font-size: 11px;
+  color: #adadb8;
+  flex-shrink: 0;
+}
+
+/* チェックボックス＋ラベルの1行。label自体をflexコンテナにすることで、
+   以前の「.groupの中にflexなlabelを入れ子にする」形で生まれていた余白を解消している。
+   `.modal-content label { display:block; ... }` の方が詳細度で勝ってしまい
+   display:flexが無視されてチェックボックスと文言が縦積みっぽく崩れていたため、
+   `.modal-content .checkbox-row` という形で詳細度を上げて確実に上書きしている。 */
+.modal-content .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #efeff1;
+  cursor: pointer;
+}
+
+/* 真因: `.modal-content input { width: 100%; }` は type を問わず全inputに効いてしまうため、
+   checkbox にも width:100% が適用され、flex-shrink:0 と組み合わさって行の幅をほぼ丸ごと占有し、
+   隣の文言がほぼ0幅に押し込まれて縦に折り返されていた。checkbox本来のサイズに明示的に固定して上書きする。 */
+.modal-content .checkbox-row input[type="checkbox"] {
+  flex-shrink: 0;
+  margin: 0;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+/* 「上限タイル数」等、<label>を使わずインラインの見出しとして使う小さいテキスト
+   （.modal-content labelのdisplay:blockを避けるため、labelの代わりにこちらを使う） */
+.field-label {
+  font-size: 13px;
+  color: #efeff1;
+  flex-shrink: 0;
+}
+
+/* 同じく `.modal-content input { width: 100%; }` の詳細度に負けて実際には効いていなかったため、
+   !important で確実に上書きする。3桁の数字＋スピンボタンがちょうど収まる幅にしている。 */
+.max-tiles-input {
+  width: 56px !important;
+}
+
+.account-name {
+  flex: 1 1 auto;
+  min-width: 80px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-login-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Kick行専用。サイトログイン/連携する・連携解除の2ボタンを右端で縦2段に積む。
+   .account-row側のalign-items:centerにより、隣接するstatus-labelがこの2段ボタンの
+   縦の中間地点に自然に来るため、単純な横並びで生まれていた余白を無くしている。 */
+.kick-account-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Auto Tune-In（フォロー配信者の自動追加）のTwitch連携ボタン行。connect/disconnectは
+   どちらか一方だけが表示されるが、account-name（flex:1）の後ろに直接置くと行が折り返した際に
+   左端に落ちてしまうため、kick-account-actionsと同様にmargin-left:autoの専用コンテナで
+   常に右端に固定する。 */
+.auto-tune-in-actions {
+  display: flex;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+#verify-accounts-btn {
+  margin-top: 10px;
+  width: 100%;
+}
+
+#account-login-close-btn {
+  background: #ff5c5c;
+}
+
+/* ---- Drops自動追加/削除 ---- */
+
+#drops-auto-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.drops-auto-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #2c2c35;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.drops-auto-row .drops-auto-game-name {
+  flex: 1;
+}
+
+.drops-auto-row .drops-auto-max {
+  color: #adadb8;
+  font-size: 12px;
+}
+
+.drops-auto-row .remove {
+  cursor: pointer;
+  color: #ff5c5c;
+}
+
+#unified-feed-filter-group {
+  margin-top: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.unified-feed-filter-btn {
+  background: #2c2c35;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #dedee3;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.unified-feed-filter-btn.active {
+  border-color: #9147ff;
+  color: #fff;
+}
+
+#unified-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  /* 1行あたり約34px（padding 16px + 行の高さ）+ gap 8px。5件分の高さに固定し、
+     それ以上はスクロールで見せる（ユーザー要望）。行の見た目を変える際はここも調整すること。 */
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.unified-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #2c2c35;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.unified-feed-row.already-added {
+  opacity: 0.55;
+}
+
+.unified-feed-platform-badge {
+  flex-shrink: 0;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+/* YouTube公式カラーの赤。絵文字（▶️）は環境によって色が変わらないため、
+   文字+CSS着色にして確実に赤で表示されるようにしている。 */
+.unified-feed-platform-badge.youtube {
+  color: #ff0000;
+}
+
+.unified-feed-platform-badge.twitch {
+  color: #9147ff;
+}
+
+/* Kick公式カラーの黄緑。 */
+.unified-feed-platform-badge.kick {
+  color: #53fc18;
+}
+
+.unified-feed-row .unified-feed-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unified-feed-row .unified-feed-viewers {
+  color: #adadb8;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.unified-feed-row button {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* 既知の `.modal-content input { width: 100%; }` 詳細度バグ（checkbox-rowと同じ原因）。
+   ここでも明示的に上書きしないとチェックボックスが行の幅をほぼ丸ごと占有してしまう。 */
+.unified-feed-row .unified-feed-target-checkbox,
+.unified-feed-row .unified-feed-pin-checkbox {
+  flex-shrink: 0;
+  cursor: pointer;
+  margin: 0;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+/* Twitch行はピン留め非対応のため、YouTube行とチェックボックスの位置が揃うようダミーの空白を入れる */
+.unified-feed-pin-spacer {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+/* Kick行はAuto Tune-In対象指定非対応のため、他行とチェックボックスの位置が揃うようダミーの空白を入れる */
+.unified-feed-target-spacer {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+/* ピン留めしたYouTubeチャンネルが現在オフラインの場合の表示（自分で外すまで一覧に残す） */
+.unified-feed-row.offline {
+  opacity: 0.55;
+}
+
+.unified-feed-row.offline .unified-feed-viewers {
+  color: #ff9f43;
+}
+
+#auto-tune-in-all-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.drops-auto-add-row {
+  margin-top: 10px;
+}
+
+.drops-auto-add-row input[type="text"] {
+  flex: 1;
+}
+
+.drops-auto-add-row input[type="number"] {
+  width: 64px;
+  background: #2c2c35;
+  border: 1px solid #3a3a45;
+  color: #efeff1;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.chip .auto-badge {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.chip .zapping-badge {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.chip .platform-badge {
+  font-size: 11px;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+/* ---- 音量ミキサー（ストリームごとの個別音量調整） ---- */
+
+/* 音量ミキサーは「🔊 音量」ボタン直下に垂れるドロップダウン形式（他のサイドパネルのような
+   全高パネル・タイル領域縮小ではなく、必要な時だけ出す最前面のコンパクトな吹き出し風UI）。
+   常に画面右上（ヘッダー直下）固定表示で、他のサイドパネルの開閉状態に影響されない
+   （renderer.jsのSIDE_PANEL_ELEMENTSには含めていない）。BrowserViewは常にHTMLより手前に
+   描画されるため、実際に「最前面」に見せるための重なり回避処理はmain.js側
+   （applyVolumeDropdownOverlapHiding）で行っている。 */
+#volume-mixer-panel {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  width: 190px;
+  max-height: 260px;
+  background: #1f1f23;
+  border: 1px solid #303038;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  /* 設定(1000)・ザッピング(1000)・チャット統合/スタンプ(900)など他の全パネルより手前に
+     出したいため、それらより高い値にしている（他パネルを開いたまま音量ミキサーだけ
+     later開いても隠れないように）。 */
+  z-index: 1100;
+  overflow-y: auto;
+}
+
+#volume-mixer-panel.hidden { display: none; }
+
+#volume-mixer-list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+
+/* 行はチャンネル名＋アイコン＋スライダーのみのシンプル構成（1行に収める） */
+.volume-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 4px;
+}
+
+.volume-row:hover {
+  background: #2c2c35;
+}
+
+.volume-row .volume-icon {
+  cursor: pointer;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.volume-row .volume-row-name {
+  font-size: 11px;
+  width: 52px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.volume-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: #9147ff;
+  cursor: pointer;
+}
+
+/* ---- チャット統合パネル（タブ切替 / 時系列統合） ----
+   上部（見出し・モード切替・タブ一覧）はHTML固定高さ、下部はタブモード時にmain.js側の
+   BrowserViewが重なって描画される領域になる（高さの合計はmain.jsのCHAT_INTEGRATION_TOP_OFFSETと一致させること）。 */
+
+#chat-integration-panel {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  background: #1f1f23;
+  border-left: 1px solid #303038;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+}
+
+#chat-integration-panel.hidden { display: none; }
+
+#chat-integration-panel .panel-header {
+  height: 40px;
+  padding: 0 12px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.chat-integration-mode-switch {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  padding: 0 8px;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.chat-integration-mode-switch button {
+  flex: 1;
+  background: #2c2c35;
+  font-size: 12px;
+  padding: 5px 0;
+}
+
+.chat-integration-mode-switch button.active {
+  background: #9147ff;
+}
+
+/* 横スクロールバーがタブの文字に被って見えていた不具合の対策で、スクロールバー分の高さを
+   きちんと確保した上でスクロールバー自体も細く（6px）している。高さを変えた場合は
+   main.jsのCHAT_INTEGRATION_TOP_OFFSETも同じ差分だけ調整すること。 */
+.chat-integration-tabs {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  gap: 4px;
+  padding: 0 8px;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  box-sizing: border-box;
+}
+
+.chat-integration-tabs::-webkit-scrollbar {
+  height: 6px;
+}
+
+.chat-integration-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-integration-tabs::-webkit-scrollbar-thumb {
+  background: #46464f;
+  border-radius: 3px;
+}
+
+.chat-integration-tabs .chat-tab {
+  flex-shrink: 0;
+  background: #2c2c35;
+  border-radius: 10px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-integration-tabs .chat-tab.active {
+  background: #9147ff;
+}
+
+/* 時系列統合モードでもタブは隠さない。チャット送信先チャンネルの選択に使う
+   （送信欄chat-integration-send-rowと連動、選択中はハイライト表示される）。 */
+
+.chat-integration-timeline {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.chat-integration-timeline.hidden { display: none; }
+
+.chat-integration-timeline .chat-line {
+  margin-bottom: 7px;
+  word-break: break-word;
+}
+
+.chat-integration-timeline .chat-channel {
+  color: #adadb8;
+  font-size: 12px;
+  margin-right: 5px;
+}
+
+.chat-integration-timeline .chat-user {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.chat-integration-send-row {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid #303038;
+}
+
+.chat-integration-send-row.hidden { display: none; }
+
+.chat-integration-send-row input {
+  flex: 1;
+  min-width: 0;
+  background: #1a1a1e;
+  border: 1px solid #46464f;
+  border-radius: 6px;
+  color: #efeff1;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.chat-integration-send-row button {
+  flex-shrink: 0;
+}
+
+/* ---- ランダム自動切換え（ザッピング） ---- */
+
+#zapping-modal.hidden { display: none; }
+
+/* ザッピングパネルも配信を表示したまま操作できるよう右側のサイドパネル形式にしている
+   （旧: 画面全体を暗くする中央モーダル。ユーザー要望により変更）。 */
+#zapping-modal {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  background: #1f1f23;
+  border-left: 1px solid #303038;
+  z-index: 1000;
+  overflow-y: auto;
+}
+
+#zapping-modal .modal-content {
+  background: transparent;
+  padding: 16px;
+  border-radius: 0;
+  max-width: none;
+}
+
+/* ---- プラットフォーム横断の統一フィード ---- */
+/* ザッピングパネルと同じく、配信を表示したまま操作できる右側サイドパネル形式。 */
+
+#unified-feed-modal.hidden { display: none; }
+
+#unified-feed-modal {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  background: #1f1f23;
+  border-left: 1px solid #303038;
+  z-index: 1000;
+  overflow-y: auto;
+}
+
+#unified-feed-modal .modal-content {
+  background: transparent;
+  padding: 16px;
+  border-radius: 0;
+  max-width: none;
+}
+
+/* ---- タイル自由配置・自由リサイズ（ウィンドウマネージャー相当） ----
+   実際のドラッグ移動／端リサイズは配信・チャットのBrowserView側（プリロード注入）で処理するため、
+   枠やハンドルのCSSはここでは不要。 */
+
+#layout-auto-arrange-btn {
+  background: #3a3a45;
+}
