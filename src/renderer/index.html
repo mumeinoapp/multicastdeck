@@ -6,6 +6,54 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- 自作メニューバー（ネイティブのMenuは廃止。実処理はmain.jsのapp-menu:*ハンドラ、
+       開閉・描画ロジックはrenderer.jsを参照）。「バージョン」項目だけは中身を動的に描画するため
+       ドロップダウンを空にしてある。 -->
+  <nav id="app-menu-bar">
+    <div class="menu-bar-item" data-menu="file">
+      <span class="menu-bar-label">ファイル</span>
+      <div class="menu-bar-dropdown">
+        <div class="menu-bar-dropdown-item" data-action="quit">終了</div>
+      </div>
+    </div>
+    <div class="menu-bar-item" data-menu="view">
+      <span class="menu-bar-label">表示</span>
+      <div class="menu-bar-dropdown">
+        <div class="menu-bar-dropdown-item" data-action="reload">再読み込み</div>
+        <div class="menu-bar-dropdown-item" data-action="toggle-devtools">開発者ツール</div>
+        <div class="menu-bar-dropdown-separator"></div>
+        <div class="menu-bar-dropdown-item" data-action="relayout">レイアウトを再計算</div>
+      </div>
+    </div>
+    <div class="menu-bar-item" data-menu="help">
+      <span class="menu-bar-label">ヘルプ</span>
+      <div class="menu-bar-dropdown">
+        <div class="menu-bar-dropdown-item" data-action="open-help">使い方 / 注記</div>
+        <div class="menu-bar-dropdown-item" data-action="open-welcome">初回案内</div>
+        <div class="menu-bar-dropdown-separator"></div>
+        <div class="menu-bar-dropdown-item" data-action="open-external" data-url="https://dev.twitch.tv/console/apps">Twitch Developer Console（Helix Client ID取得）</div>
+        <div class="menu-bar-dropdown-item" data-action="open-external" data-url="https://kick.com/settings/developer">Kick Developer Portal（Client ID取得）</div>
+      </div>
+    </div>
+    <div class="menu-bar-item" data-menu="version">
+      <span class="menu-bar-label">
+        バージョン
+        <span class="menu-badge" id="version-menu-badge"></span>
+      </span>
+      <div class="menu-bar-dropdown" id="version-menu-dropdown"></div>
+    </div>
+    <!-- こちらは会員登録と同様、ドロップダウンを持たずクリックで直接ポップアップを開く単独項目。 -->
+    <div class="menu-bar-item" data-menu="feedback" data-action="open-feedback">
+      <span class="menu-bar-label">フィードバック</span>
+    </div>
+    <!-- クリックでドロップダウンではなく中央ポップアップ（#pro-auth-modal）を開く単独項目。
+         ドロップダウンを持たないため data-action を項目自体に付けている。
+         メニューバーの一番右に配置（旧: バージョンの隣→現在は末尾）。 -->
+    <div class="menu-bar-item" data-menu="pro-auth" data-action="open-pro-auth">
+      <span class="menu-bar-label">会員登録</span>
+    </div>
+  </nav>
+
   <header id="control-bar">
     <div class="group" id="add-channel-group">
       <select id="channel-platform-select" title="追加するチャンネルの配信サイト">
@@ -285,7 +333,7 @@
         <h3>有料機能（Pro機能）について</h3>
         <p class="note">
           基本無料＋一部機能を有料解除する方針です。以下の機能は<strong>Proプラン加入者のみ</strong>利用できます
-          （未加入の場合はボタンがロック表示になります）。設定画面の「Pro会員登録」からメールアドレスでログインし、加入状況の反映・お申し込み（購入）ができます。
+          （未加入の場合はボタンがロック表示になります）。メニューバーの「会員登録」からメールアドレスでログインし、加入状況の反映・お申し込み（購入）ができます。
         </p>
         <ul>
           <li>📡 配信チェック（統一フィード・フォロー配信者の自動追加）</li>
@@ -300,12 +348,92 @@
     </div>
   </div>
 
+  <!-- アップデート確認はメニューバーの「アップデートを確認」（ファイル/表示/ヘルプと同じ
+       ネイティブドロップダウンメニュー）だけで完結するため、専用のHTML/モーダルは持たない
+       （main.jsのbuildUpdaterSubmenu参照）。 -->
+
+  <!-- 会員登録（メールアドレス＋6桁確認コードでのログイン・お申し込み）。以前は設定パネル内の
+       一項目だったが、メニューバーの「会員登録」（一番右）から直接開ける中央ポップアップに
+       独立させた。中身のロジック（renderer.jsのrefreshProAuthPanel等）は変更していない。 -->
+  <div id="pro-auth-modal" class="hidden">
+    <div class="modal-content pro-auth-modal-content">
+      <h2>会員登録</h2>
+      <p class="note">メールアドレスだけで登録・ログインできます（パスワードは不要です）。ログインすると、加入中のPro機能が自動的に使えるようになります。未加入の場合は下から購入できます。</p>
+
+      <label>接続先サーバーURL（通常はそのままで大丈夫です）</label>
+      <p class="note">会員登録機能が通信する専用サーバーのアドレスです。あらかじめ設定済みのため、基本的に変更する必要はありません。</p>
+      <input id="pro-auth-backend-url-input" type="text" placeholder="例: https://multicastdeck.xxxx.workers.dev" />
+
+      <div id="pro-auth-logged-out-area">
+        <label>メールアドレス</label>
+        <input id="pro-auth-email-input" type="email" placeholder="you@example.com" />
+        <button id="pro-auth-request-code-btn">確認コードを送信</button>
+
+        <label>確認コード（6桁）</label>
+        <input id="pro-auth-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="123456" />
+        <button id="pro-auth-verify-code-btn">コードを確認してログイン</button>
+      </div>
+
+      <div id="pro-auth-logged-in-area" class="hidden">
+        <p class="note">ログイン中: <span id="pro-auth-logged-in-email"></span></p>
+        <p class="note">Pro状態: <span id="pro-auth-status-text"></span></p>
+        <button id="pro-auth-refresh-status-btn">最新の状態に更新</button>
+        <button id="pro-auth-logout-btn">ログアウト</button>
+
+        <div id="pro-checkout-area">
+          <p class="note">
+            購入手続きはブラウザで開きます。カードは毎月自動更新、銀行振込・PayPayは選んだ期間分の1回払いです。
+          </p>
+
+          <button id="pro-checkout-card-btn">カードで購入（月額・自動更新）</button>
+
+          <label>期間を選んで購入（銀行振込・PayPay）</label>
+          <select id="pro-checkout-months-select">
+            <option value="1">1か月</option>
+            <option value="6">6か月（10%引き）</option>
+            <option value="12">12か月（20%引き）</option>
+          </select>
+          <button id="pro-checkout-other-btn">選んだ期間で購入</button>
+        </div>
+      </div>
+
+      <div id="pro-auth-message" class="note"></div>
+
+      <div class="modal-actions">
+        <button id="pro-auth-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- フィードバック。メニューバーの「フィードバック」（バージョンの隣）から開く中央ポップアップ。
+       件名・本文のみのシンプルな作り。決済バックエンド（multistream-payment-backend）の
+       POST /feedback経由でDiscordのチャンネルへ転送する（main.jsのapp-menu:send-feedback参照）。 -->
+  <div id="feedback-modal" class="hidden">
+    <div class="modal-content feedback-modal-content">
+      <h2>フィードバック</h2>
+
+      <label>件名</label>
+      <input id="feedback-subject-input" type="text" placeholder="例: バグ報告 / 機能追加のご要望" />
+
+      <label>本文</label>
+      <textarea id="feedback-body-input" rows="6" placeholder="バグ報告や機能追加のご要望など、お気軽にお送りください。"></textarea>
+
+      <p class="note">送信ボタンを押すと、開発者へ直接届きます。</p>
+      <div id="feedback-message" class="note"></div>
+
+      <div class="modal-actions">
+        <button id="feedback-send-btn">送信</button>
+        <button id="feedback-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Pro機能（ロック中）をクリックした際の案内モーダル。決済基盤は準備中のため、現時点では
        案内表示のみ（実際のアンロック導線は決済基盤の実装後に追加）。 -->
   <div id="premium-locked-modal" class="hidden">
     <div class="modal-content">
       <h2>🔒 Pro機能</h2>
-      <p class="note">この機能はProプラン加入者向けの有料機能です。設定画面の「Pro会員登録」からログインし、加入状況の反映・お申し込み（購入）ができます。詳しくは「使い方/注記」の「有料機能」タブをご覧ください。</p>
+      <p class="note">この機能はProプラン加入者向けの有料機能です。メニューバーの「会員登録」からログインし、加入状況の反映・お申し込み（購入）ができます。詳しくは「使い方/注記」の「有料機能」タブをご覧ください。</p>
       <div class="modal-actions">
         <button id="premium-locked-open-help-btn">使い方/注記を見る</button>
         <button id="premium-locked-close-btn">閉じる</button>
@@ -337,20 +465,24 @@
     <div class="modal-content">
       <h2>設定</h2>
 
-      <h3>アップデート</h3>
-      <p class="note">現在のバージョン: <span id="updater-current-version">-</span></p>
-      <button id="updater-check-btn">アップデートを確認</button>
-      <div id="updater-message" class="note"></div>
-      <button id="updater-install-btn" class="hidden">今すぐ更新して再起動</button>
-
-      <div class="settings-divider"></div>
-
       <label>Twitch embed parentドメイン</label>
       <input id="parent-domain-input" type="text" placeholder="例: localhost / yourapp.example.com" />
       <p class="note">配信・チャット埋め込みの<code>parent</code>パラメータです。配布時は実際のアプリのドメイン（またはElectronのビルド設定に応じた値）に変更してください。</p>
 
       <label>レイアウト列数（0 = 自動）</label>
       <input id="layout-columns-input" type="number" min="0" max="8" />
+
+      <label>コメントのフォント（全タブ統合）</label>
+      <select id="comment-font-select">
+        <option value="">デフォルト（Twitchのフォント）</option>
+        <option value="'Yu Gothic', sans-serif">游ゴシック</option>
+        <option value="'Meiryo', sans-serif">メイリオ</option>
+        <option value="'MS Gothic', monospace">MSゴシック（等幅）</option>
+        <option value="'Yu Mincho', serif">游明朝</option>
+        <option value="Georgia, serif">Georgia（欧文セリフ）</option>
+        <option value="'Comic Sans MS', cursive">Comic Sans MS</option>
+      </select>
+      <p class="note">全タブ統合のコメント本文のみに適用されます（配信名・ユーザー名の書体は変わりません）。</p>
 
       <label>Twitch Helix Client ID</label>
       <input id="helix-client-id-input" type="text" placeholder="dev.twitch.tv/console/apps で無料取得" />
@@ -374,49 +506,8 @@
 
       <div class="settings-divider"></div>
 
-      <h3>Pro会員登録</h3>
-      <p class="note">メールアドレスとパスワード不要の確認コードでログインします。ログインすると加入状況（Pro機能のアンロック）が自動反映されます。ログイン後、下部からお申し込み（購入）ができます。</p>
-
-      <label>決済バックエンドURL</label>
-      <input id="pro-auth-backend-url-input" type="text" placeholder="例: https://multistream-payment-backend.xxxx.workers.dev" />
-
-      <div id="pro-auth-logged-out-area">
-        <label>メールアドレス</label>
-        <input id="pro-auth-email-input" type="email" placeholder="you@example.com" />
-        <button id="pro-auth-request-code-btn">確認コードを送信</button>
-
-        <label>確認コード（6桁）</label>
-        <input id="pro-auth-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="123456" />
-        <button id="pro-auth-verify-code-btn">コードを確認してログイン</button>
-      </div>
-
-      <div id="pro-auth-logged-in-area" class="hidden">
-        <p class="note">ログイン中: <span id="pro-auth-logged-in-email"></span></p>
-        <p class="note">Pro状態: <span id="pro-auth-status-text"></span></p>
-        <button id="pro-auth-refresh-status-btn">最新の状態に更新</button>
-        <button id="pro-auth-logout-btn">ログアウト</button>
-
-        <div id="pro-checkout-area">
-          <p class="note">
-            お申し込み（決済ページはブラウザで開きます）。
-            カードは毎月自動更新、それ以外（銀行振込・PayPay）は選んだ期間分の1回払いです。
-          </p>
-
-          <button id="pro-checkout-card-btn">カードで購入（月額・自動更新）</button>
-
-          <label>期間を選んで購入（銀行振込・PayPay）</label>
-          <select id="pro-checkout-months-select">
-            <option value="1">1か月</option>
-            <option value="6">6か月（10%引き）</option>
-            <option value="12">12か月（20%引き）</option>
-          </select>
-          <button id="pro-checkout-other-btn">選んだ期間で購入</button>
-        </div>
-      </div>
-
-      <div id="pro-auth-message" class="note"></div>
-
-      <div class="settings-divider"></div>
+      <!-- 会員登録はメニューバーの「会員登録」（一番右）から開くポップアップに
+           移設済み（#pro-auth-modal参照）。 -->
 
       <h3>アカウント連携</h3>
       <p class="note">ログインしておくと配信タイル・Dropsなどにもログイン状態が引き継がれます。</p>

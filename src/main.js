@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, BrowserView, ipcMain, screen, Menu, shell, session } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, screen, Menu, shell, session, dialog } = require('electron');
 const path = require('path');
 const https = require('https');
 const http = require('http');
@@ -9,9 +9,10 @@ const Store = require('electron-store');
 const { autoUpdater } = require('electron-updater');
 
 // GitHub Releases（mumeinoapp/multicastdeck）を参照するアップデート確認機能。
-// 自動ダウンロード・自動インストールはせず、必ずユーザーが設定画面の「アップデートを確認」
-// ボタンを押した時だけチェックし、更新があればユーザーの明示的な操作（ダウンロード→再起動して
-// インストール）を経て適用する（勝手に更新して再起動させることはしない）。
+// メニューバーの「アップデートを確認」（ファイル/表示/ヘルプと同じネイティブメニュー）から
+// 完結し、ウィンドウやパネルは一切出さない。自動ダウンロード・自動インストールはせず、
+// メニューから明示的にユーザーが操作（確認→ダウンロード→再起動してインストール）した時だけ
+// 適用する（勝手に更新して再起動させることはしない）。
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
@@ -23,6 +24,9 @@ const store = new Store({
     channelOrder: [], // 表示順（並び替え対応）
     parentDomain: 'localhost',
     layoutColumns: 0, // 0 = 自動（正方形に近いグリッド）。現在は「自動整列」実行時にのみ使用
+    // 全タブ統合チャットのコメント本文（配信名・ユーザー名は除く）に適用するフォント。
+    // 空文字列 = 未指定（デフォルト＝現状通りの見た目、実質Twitchのフォント）。
+    commentFontFamily: '',
     helixClientId: '',
     helixClientSecret: '',
     // Kick Developer Portal（kick.com/settings/developer）で発行するOAuth 2.1（PKCE必須）アプリの
@@ -99,8 +103,8 @@ const store = new Store({
     // 「表示メニュー > 開発用: Pro機能アンロックを切り替え」による手動トグル（開発者確認用）のみが効く。
     premiumUnlocked: false,
     // 決済バックエンド（multistream-payment-backend、Cloudflare Workers）のデプロイ先URL。
-    // 例: https://multistream-payment-backend.xxxx.workers.dev （末尾にスラッシュは付けない）
-    paymentBackendUrl: '',
+    // 決済方針.md記載の本番デプロイ先をデフォルト値にしている（通常はユーザーが変更する必要はない）。
+    paymentBackendUrl: 'https://multicastdeck.mumeinoapp.workers.dev',
     // メールアドレス+6桁確認コード認証で発行される長期トークン。ログイン済みの間はこれを使って
     // /statusを呼び出し、Pro（premiumUnlocked）状態を確認する。
     proAuthToken: null,
@@ -113,6 +117,28 @@ const store = new Store({
 /** @type {BrowserWindow} */
 let mainWindow;
 
+// 「バージョン」メニューの表示状態。{ status: 'idle'|'checking'|'available'|
+// 'not-available'|'downloading'|'downloaded'|'error', version?, percent? }
+let updaterState = { status: 'idle' };
+
+/** 「バージョン」メニュー内「アップデートを確認」クリック時の共通処理。 */
+function manualCheckForUpdates() {
+  if (!app.isPackaged) {
+    // electron-updaterはパッケージ化されたアプリでしか正しく動作しない（app-update.ymlが
+    // ビルド時にのみ生成されるため）。npm start（開発モード）では待たせずすぐ伝える。
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'アップデートを確認',
+      message: '開発モード（npm start）ではアップデート確認はできません。ビルドしたアプリでお試しください。',
+    });
+    return;
+  }
+  autoUpdater.checkForUpdates().catch(() => {
+    // エラー内容は autoUpdater.on('error', ...) 側で処理する（ダイアログは出さず、メニューの
+    // 表示だけを更新する）。
+  });
+}
+
 /** チャンネル毎の { streamView, chatView, channel } を保持 */
 const streamViews = new Map();
 
@@ -122,9 +148,9 @@ let dropsView = null;
 let kickDropsView = null;
 
 // UI（コントロールパネル）が占める上部の高さ(px)。それ以下を配信表示エリアとして BrowserView を敷き詰める。
-// ヘッダーが操作ボタン2行＋下の通知バー(status-bar)構成になったため、64→106に変更
-// （style.cssの #control-bar の height (84px) + #status-bar の height (22px) と一致させること）。
-const HEADER_HEIGHT = 106;
+// ネイティブメニュー廃止に伴い自作メニューバー(#app-menu-bar, 26px)を最上部に追加したため、106→132に変更
+// （style.cssの #app-menu-bar の height (26px) + #control-bar の height (84px) + #status-bar の height (22px) と一致させること）。
+const HEADER_HEIGHT = 132;
 
 /**
  * タイル（配信+チャットのペア）の自由リサイズ・自由移動機能（ウィンドウマネージャー相当）用の定数。
@@ -961,6 +987,18 @@ function createMainWindow() {
   mainWindow = new BrowserWindow({
     width,
     height,
+    // ヘッダー（#control-bar）はチャンネルチップ欄・操作ボタン・右端固定ボタンが
+    // 縮まない固定幅レイアウトのため、ウィンドウをこれより狭くするとヘッダー右側の要素が
+    // 画面外にはみ出してしまう（実機報告への対応）。1000x600を下回れないようにして、
+    // レイアウトが破綻するサイズまで縮小できないようにする。
+    minWidth: 1000,
+    minHeight: 600,
+    // 配信タイル（BrowserView）側からHTML5 Fullscreen APIが呼ばれると、Electronの既定挙動として
+    // mainWindowごとOSレベルのフルスクリーンに昇格し、タイトルバー（最小化/最大化/閉じるボタン）が
+    // 消えてリサイズ・ドラッグ移動もできなくなる（実機報告のあった「突然リサイズ不可になる」不具合の
+    // 原因と考えられる）。タイルの拡大表示はアプリ独自のリサイズ機能で代替できるため、
+    // ウィンドウ自体のOSフルスクリーン昇格は無効化する。
+    fullscreenable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -980,65 +1018,47 @@ function createMainWindow() {
     relayoutTwitchAuthView();
   });
 
+  // fullscreenable:falseにしていても、BrowserView側からのHTML5 Fullscreen API呼び出しに対する
+  // 万一のフェイルセーフとして、enter-html-full-screenが発火した場合は即座に強制解除する。
+  mainWindow.on('enter-html-full-screen', () => {
+    try {
+      mainWindow.setFullScreen(false);
+    } catch (_) {
+      /* ignore */
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 
-  buildAppMenu();
+  // ネイティブのアプリケーションメニューは使わない。ファイル/表示/ヘルプ/バージョンは
+  // すべてrenderer側の自作メニューバー（index.html #app-menu-bar、renderer.js）で描画し、
+  // 実際の処理だけをここで定義するIPCハンドラ（app-menu:*）経由でmain.jsに委譲する。
+  // 理由: 「バージョン」項目の右上に、スマホアプリの未読バッジのような赤丸を出したいという
+  // 要望があり、ネイティブメニューでは項目の位置・サイズを自由に制御できない（Windowsでは
+  // アイコンは常にラベルの左側固定）ため、HTML/CSSで自由に配置できる自作メニューに切り替えた。
+  Menu.setApplicationMenu(null);
 }
 
-function buildAppMenu() {
-  const template = [
-    {
-      label: 'ファイル',
-      submenu: [{ role: 'quit', label: '終了' }],
-    },
-    {
-      label: '表示',
-      submenu: [
-        { role: 'reload', label: '再読み込み' },
-        { role: 'toggleDevTools', label: '開発者ツール' },
-        { type: 'separator' },
-        {
-          label: 'レイアウトを再計算',
-          click: () => relayoutStreamViews(),
-        },
-        { type: 'separator' },
-        // 決済基盤（Komoju連携）実装までの暫定措置。実際の決済確認とは連動していない開発者用トグル。
-        {
-          label: '開発用: Pro機能アンロックを切り替え',
-          click: () => {
-            const next = !store.get('premiumUnlocked');
-            store.set('premiumUnlocked', next);
-            notifyRenderer('premium:changed', next);
-          },
-        },
-      ],
-    },
-    {
-      label: 'ヘルプ',
-      submenu: [
-        {
-          label: '使い方 / 注記',
-          click: () => notifyRenderer('ui:open-help'),
-        },
-        {
-          label: '初回案内をもう一度見る',
-          click: () => notifyRenderer('ui:open-welcome'),
-        },
-        { type: 'separator' },
-        {
-          label: 'Twitch Developer Console（Helix Client ID取得）',
-          click: () => shell.openExternal('https://dev.twitch.tv/console/apps'),
-        },
-        {
-          label: 'Kick Developer Portal（Client ID取得）',
-          click: () => shell.openExternal('https://kick.com/settings/developer'),
-        },
-      ],
-    },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+/** 「バージョン」メニュー右上の赤丸バッジを出すべきか。renderer側に渡す状態にも使う。 */
+function hasUpdateBadge() {
+  return updaterState.status === 'available' || updaterState.status === 'downloaded';
+}
+
+/** 自作メニューバー（renderer.js）が必要とする状態一式。取得時・変化時の両方でこれを渡す。 */
+function getAppMenuState() {
+  return {
+    appVersion: app.getVersion(),
+    premiumUnlocked: !!store.get('premiumUnlocked'),
+    hasUpdateBadge: hasUpdateBadge(),
+    updater: { ...updaterState },
+  };
+}
+
+/** app-menu:state-changed をrendererへ送る（値が変わるあらゆる箇所から呼ぶ）。 */
+function notifyAppMenuStateChanged() {
+  notifyRenderer('app-menu:state-changed', getAppMenuState());
 }
 
 // ---- YouTube埋め込み用ローカルHTTPサーバー ----
@@ -2403,6 +2423,10 @@ async function loadYoutubeLiveStreamFree(streamView, channelName, handleOrChanne
     // 解決結果をstreamViewsのエントリにも書き戻しておく（ハンドル追加時は当初nullのため）。
     const entry = streamViews.get(channelName);
     if (entry) entry.youtubeVideoId = videoId;
+    // youtubeVideoIdが非同期解決された時点で全タブ統合側（syncYoutubeChatWatch等）に
+    // 変化を伝える。これが無いと、ハンドル/チャンネル名で追加したYouTubeチャンネルは
+    // 動画IDが後から判明しても統合チャットに反映されないままになる。
+    notifyRenderer('channels:changed');
     const url = `http://127.0.0.1:${YOUTUBE_EMBED_SERVER_PORT}/embed?video=${encodeURIComponent(videoId)}`;
     await streamView.webContents.loadURL(url);
   } catch (err) {
@@ -4362,6 +4386,9 @@ ipcMain.handle('channels:add', async (_e, payload) => {
     } else {
       addChannel(trimmed, { platform: 'youtube', youtubeChannelId: parsed.value });
     }
+    // 全タブ統合パネルが開いている場合にリアルタイムで新規タブを反映させるため通知する
+    // （renderer側のonChannelsChangedがrefreshChatIntegrationIfOpen経由でsyncIrcChannels等を呼ぶ）。
+    notifyRenderer('channels:changed');
     return { ok: true };
   }
 
@@ -4369,10 +4396,12 @@ ipcMain.handle('channels:add', async (_e, payload) => {
     // Kickは公式埋め込みプレイヤー（player.kick.com/{username}）にユーザー名（=Kickのスラッグ）を
     // そのまま渡すだけで再生できるため、YouTubeのような動画ID解決は不要。
     addChannel(trimmed, { platform: 'kick' });
+    notifyRenderer('channels:changed');
     return { ok: true };
   }
 
   addChannel(trimmed);
+  notifyRenderer('channels:changed');
   return { ok: true };
 });
 
@@ -4451,6 +4480,7 @@ ipcMain.handle('settings:get-all', () => ({
   kickClientId: store.get('kickClientId'),
   kickClientSecret: store.get('kickClientSecret'),
   paymentBackendUrl: store.get('paymentBackendUrl'),
+  commentFontFamily: store.get('commentFontFamily'),
 }));
 
 ipcMain.handle('settings:set-all', (_e, partial) => {
@@ -4570,30 +4600,112 @@ ipcMain.handle('app:set-first-launch-done', () => {
   return true;
 });
 
-// 有料機能（Pro機能）アンロック状態。決済基盤は未実装のため、現時点ではこの値をそのまま返す
-// プレースホルダー実装（開発者確認用。将来的にKomoju決済確認と連動させる）。
+// 有料機能（Pro機能）アンロック状態。会員登録ログイン後のrefreshProAuthStatus（/status連携、
+// 開発者本人のメールなら自動アンロック）によってのみ更新される。
 ipcMain.handle('app:get-premium-unlocked', () => store.get('premiumUnlocked'));
 
-ipcMain.handle('app:set-premium-unlocked', (_e, value) => {
-  store.set('premiumUnlocked', !!value);
-  notifyRenderer('premium:changed', !!value);
-  return true;
+// ---- 自作メニューバー（ファイル/表示/ヘルプ/バージョン。index.html #app-menu-bar、renderer.js） ----
+// ネイティブのMenuを廃止した代わりに、実処理だけをここに集約する。表示・開閉・状態の見た目は
+// すべてrenderer側の責務。
+
+ipcMain.handle('app-menu:get-state', () => getAppMenuState());
+
+ipcMain.handle('app-menu:quit', () => {
+  app.quit();
 });
 
-// ---- Pro会員登録（メールアドレス＋6桁確認コード認証、multistream-payment-backend連携） ----
+ipcMain.handle('app-menu:reload', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+});
+
+ipcMain.handle('app-menu:toggle-devtools', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.toggleDevTools();
+});
+
+ipcMain.handle('app-menu:relayout', () => {
+  relayoutStreamViews();
+});
+
+ipcMain.handle('app-menu:open-external', (_e, url) => {
+  // ヘルプメニューからの固定リンクのみを許可し、任意のURLを開けないようにする。
+  const allowed = ['https://dev.twitch.tv/console/apps', 'https://kick.com/settings/developer'];
+  if (allowed.includes(url)) shell.openExternal(url);
+});
+
+ipcMain.handle('app-menu:check-update', () => {
+  manualCheckForUpdates();
+});
+
+ipcMain.handle('app-menu:download-update', () => {
+  autoUpdater.downloadUpdate();
+});
+
+// 「バージョン」メニューのダウンロード完了後、「今すぐ更新」（アプリを終了してインストーラーを
+// 起動するだけ。インストール後にアプリを再度開くかどうかはインストーラーの画面上の選択に委ねる）と
+// 「今すぐ更新して再起動」（インストール完了後、自動でアプリを再起動する）の2択に分けている。
+// electron-updaterのquitAndInstall(isSilent, isForceRunAfter)の第2引数がこの違いに対応する。
+ipcMain.handle('app-menu:install-update', (_e, { forceRunAfter } = {}) => {
+  autoUpdater.quitAndInstall(false, !!forceRunAfter);
+});
+
+// フィードバック（メニューバーの「フィードバック」、バージョンの隣）。以前はmailtoで既定の
+// メールソフトを開くだけだったが、アプリ内から直接送れるようにしてほしいという要望を受け、
+// 決済バックエンド（multistream-payment-backend）に追加した POST /feedback 経由でDiscordの
+// チャンネルへ転送する方式に変更した（2026-07-25）。Discord Webhook URL自体はバックエンド側の
+// シークレット（DISCORD_WEBHOOK_URL）としてのみ保持し、Publicリポジトリのこのアプリ側には
+// 一切含めていない（paymentBackendFetchは決済方針.md記載の既定バックエンドURLを使い回す）。
+ipcMain.handle('app-menu:send-feedback', async (_e, { subject, body } = {}) => {
+  await paymentBackendFetch('/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ subject, body }),
+  });
+});
+
+// ---- 会員登録（メールアドレス＋6桁確認コード認証、multistream-payment-backend連携） ----
 // 決済方針.md参照。カード/都度払いの購入導線自体は別タスクで、まずは
 // 「メール入力→確認コード→ログイン→/statusでPro状態確認」の認証部分のみを実装する。
 
-/** 設定画面で入力されたバックエンドURL（末尾スラッシュを除いたもの）を返す。未設定ならnull。 */
+// 決済方針.md記載の本番デプロイ先。paymentBackendUrlのstoreスキーマdefaultとしても設定しているが、
+// electron-storeのdefaultはstoreファイルが既に作られている既存インストールには効かない
+// （''が保存されたまま残る）ため、読み取り側でも同じ既定値にフォールバックさせている。
+const DEFAULT_PAYMENT_BACKEND_URL = 'https://multicastdeck.mumeinoapp.workers.dev';
+
+// 2026-07-31にバックエンドのURLを multistream-payment-backend.mumeinoapp.workers.dev から
+// multicastdeck.mumeinoapp.workers.dev に変更した際の旧デフォルトURL。会員登録ポップアップで
+// 一度でも「確認コードを送信」等を行ったユーザーは、この旧URLがstoreに明示的に保存されたままに
+// なっており、コード側のデフォルト値だけを変更してもそのユーザーには反映されない
+// （store.get()は明示的に保存された値をデフォルトより優先するため）。そのため起動時、
+// 保存されている値がこの旧デフォルトと完全一致する場合に限り、新デフォルトへ自動的に
+// 移行する（ユーザーが独自のURLに変更していた場合はそのまま尊重し、上書きしない）。
+const LEGACY_DEFAULT_PAYMENT_BACKEND_URL = 'https://multistream-payment-backend.mumeinoapp.workers.dev';
+
+/** 起動時に一度だけ呼ぶ。paymentBackendUrlが旧デフォルトのままなら新デフォルトへ移行する。 */
+function migrateLegacyPaymentBackendUrl() {
+  const current = String(store.get('paymentBackendUrl') || '').trim();
+  if (current === LEGACY_DEFAULT_PAYMENT_BACKEND_URL) {
+    store.set('paymentBackendUrl', DEFAULT_PAYMENT_BACKEND_URL);
+  }
+}
+
+// 開発者本人（このメールで会員登録ログインした場合）は、Stripeの決済・購読状況に関係なく
+// 常にPro機能をアンロックする。表示メニューの手動トグル（廃止済み）に代わる仕組み。
+// 配布版の他ユーザーには一切影響しない（このメールでログインできるのは開発者本人のみ）。
+const DEVELOPER_EMAIL = 'mumeinoapp@gmail.com';
+
+function isDeveloperEmail(email) {
+  return String(email || '').trim().toLowerCase() === DEVELOPER_EMAIL;
+}
+
+/** 会員登録ポップアップで入力されたバックエンドURL（末尾スラッシュを除いたもの）を返す。 */
 function getPaymentBackendBaseUrl() {
-  const raw = String(store.get('paymentBackendUrl') || '').trim();
+  const raw = String(store.get('paymentBackendUrl') || DEFAULT_PAYMENT_BACKEND_URL).trim();
   if (!raw) return null;
   return raw.replace(/\/+$/, '');
 }
 
 async function paymentBackendFetch(pathname, options = {}) {
   const base = getPaymentBackendBaseUrl();
-  if (!base) throw new Error('決済バックエンドのURLが設定画面で未設定です');
+  if (!base) throw new Error('決済バックエンドURLが利用できません。会員登録のポップアップでご確認ください');
   const res = await fetch(`${base}${pathname}`, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
@@ -4621,7 +4733,7 @@ async function refreshProAuthStatus() {
     const body = await res.json().catch(() => null);
     if (!res.ok) throw new Error((body && (body.error || body.message)) || `サーバーエラー (HTTP ${res.status})`);
     store.set('proStatus', body);
-    const active = !!(body && (body.active || body.premiumUnlocked));
+    const active = isDeveloperEmail(store.get('proAuthEmail')) || !!(body && (body.active || body.premiumUnlocked));
     store.set('premiumUnlocked', active);
     notifyRenderer('premium:changed', active);
     return body;
@@ -4632,7 +4744,7 @@ async function refreshProAuthStatus() {
 }
 
 ipcMain.handle('pro-auth:get-config', () => ({
-  backendUrl: store.get('paymentBackendUrl') || '',
+  backendUrl: store.get('paymentBackendUrl') || DEFAULT_PAYMENT_BACKEND_URL,
   email: store.get('proAuthEmail') || null,
   loggedIn: !!store.get('proAuthToken'),
   proStatus: store.get('proStatus') || null,
@@ -4693,7 +4805,7 @@ ipcMain.handle('pro-auth:logout', () => {
   store.set('proAuthToken', null);
   store.set('proAuthEmail', null);
   store.set('proStatus', null);
-  // ログアウト時はPro状態も解除する（開発用トグルで手動再アンロックは可能なまま）。
+  // ログアウト時はPro状態も解除する（開発者本人でも、再ログインするまでは解除される）。
   store.set('premiumUnlocked', false);
   notifyRenderer('premium:changed', false);
   return true;
@@ -4705,53 +4817,35 @@ setInterval(() => {
 }, 10 * 60 * 1000);
 
 // ---- アップデート確認（GitHub Releases: mumeinoapp/multicastdeck） ----
-// 進捗はすべて 'updater:status' で通知する。
-// state: 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
-
-ipcMain.handle('updater:get-version', () => app.getVersion());
-
-ipcMain.handle('updater:check', async () => {
-  try {
-    await autoUpdater.checkForUpdates();
-    return true;
-  } catch (err) {
-    notifyRenderer('updater:status', { state: 'error', message: String(err.message || err) });
-    return false;
-  }
-});
-
-ipcMain.handle('updater:download', async () => {
-  try {
-    await autoUpdater.downloadUpdate();
-    return true;
-  } catch (err) {
-    notifyRenderer('updater:status', { state: 'error', message: String(err.message || err) });
-    return false;
-  }
-});
-
-ipcMain.handle('updater:install', () => {
-  autoUpdater.quitAndInstall();
-  return true;
-});
+// ウィンドウ・パネルもネイティブダイアログも一切出さず、renderer側の自作メニューバーの
+// 「バージョン」ドロップダウンだけで完結させる。アップデートが見つかった場合は、
+// 「バージョン」ラベルの右上に赤丸バッジを出して一目でわかるようにする（hasUpdateBadge参照）。
 
 autoUpdater.on('checking-for-update', () => {
-  notifyRenderer('updater:status', { state: 'checking' });
+  updaterState = { status: 'checking' };
+  notifyAppMenuStateChanged();
 });
 autoUpdater.on('update-available', (info) => {
-  notifyRenderer('updater:status', { state: 'available', version: info.version });
+  updaterState = { status: 'available', version: info.version };
+  notifyAppMenuStateChanged();
 });
 autoUpdater.on('update-not-available', () => {
-  notifyRenderer('updater:status', { state: 'not-available' });
+  updaterState = { status: 'not-available' };
+  notifyAppMenuStateChanged();
 });
 autoUpdater.on('download-progress', (progress) => {
-  notifyRenderer('updater:status', { state: 'downloading', percent: Math.round(progress.percent || 0) });
+  updaterState = { status: 'downloading', percent: Math.round(progress.percent || 0) };
+  notifyAppMenuStateChanged();
 });
 autoUpdater.on('update-downloaded', (info) => {
-  notifyRenderer('updater:status', { state: 'downloaded', version: info.version });
+  updaterState = { status: 'downloaded', version: info.version };
+  notifyAppMenuStateChanged();
 });
 autoUpdater.on('error', (err) => {
-  notifyRenderer('updater:status', { state: 'error', message: String((err && err.message) || err) });
+  // 手動確認・起動時の静かなチェックのどちらでも、失敗時にダイアログは出さない。
+  // メニューの中身（「確認できませんでした」）だけで状態を伝える。
+  updaterState = { status: 'error' };
+  notifyAppMenuStateChanged();
 });
 
 // ヘッダー操作ボタンのドラッグ並び替え結果の保存/取得
@@ -5044,6 +5138,7 @@ ipcMain.handle('emotes:fetch', async (_e, channelName) => {
 });
 
 app.whenReady().then(() => {
+  migrateLegacyPaymentBackendUrl();
   createMainWindow();
   // 前回終了時のチャンネルを復元。Drops自動追加/削除で追加されたチャンネルは
   // autoAddedChannels（永続化済み）を見て自動追加扱いのまま復元する。これをやらないと
@@ -5078,6 +5173,16 @@ app.whenReady().then(() => {
   });
   syncDropsAutoWatcherState();
   syncAutoTuneInWatcherState();
+
+  // 起動時のアップデート確認は「静かに」行う。ダイアログ等は一切出さず、結果は
+  // メニューバーの「アップデートを確認」を開いた時に見える状態にしておくだけ。
+  if (app.isPackaged) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => {
+        // 起動時の静かなチェックはエラーを表面化させない（手動確認時のみエラーを表示する）。
+      });
+    }, 5000);
+  }
 });
 
 app.on('window-all-closed', () => {

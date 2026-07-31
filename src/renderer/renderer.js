@@ -21,8 +21,9 @@ const welcomeCloseBtn = document.getElementById('welcome-close-btn');
 const welcomeOpenHelpBtn = document.getElementById('welcome-open-help-btn');
 
 // ---- 有料機能（Pro機能）のロックUI ----
-// 決済基盤（Komoju連携）は未実装のため、premiumUnlockedは現時点では開発者確認用の
-// プレースホルダーフラグ（main.jsのメニュー「開発用: Pro機能アンロックを切り替え」で切替可能）。
+// premiumUnlockedは会員登録ログイン後の/statusレスポンス（Stripe決済状況）で決まる
+// （main.jsのrefreshProAuthStatus参照）。開発者本人のメールでログインした場合のみ、
+// main.js側で決済状況によらず自動でtrueになる。
 const PRO_BUTTON_IDS = ['zapping-btn', 'unified-feed-btn'];
 const premiumLockedModal = document.getElementById('premium-locked-modal');
 const premiumLockedCloseBtn = document.getElementById('premium-locked-close-btn');
@@ -57,6 +58,16 @@ window.api.onPremiumChanged((value) => {
 (async () => {
   premiumUnlocked = await window.api.getPremiumUnlocked();
   applyPremiumLockUiStates();
+})();
+
+// 全タブ統合チャットのコメント本文フォント。保存済みの値を起動時に一度読み込み、
+// CSS変数へ反映しておく（パネルを開く前でも、次に開いた時点で正しいフォントになる）。
+function applyCommentFontFamily(fontFamily) {
+  document.documentElement.style.setProperty('--comment-font-family', fontFamily || 'inherit');
+}
+(async () => {
+  const s = await window.api.getAllSettings();
+  applyCommentFontFamily(s.commentFontFamily);
 })();
 
 let dropsOpen = false;
@@ -344,10 +355,12 @@ dropsProgressBtn.addEventListener('click', async () => {
   dropsProgressResult.textContent = `進捗: ${first.valueNow ?? '?'} / ${first.valueMax ?? '?'}（${result.count}件検出）`;
 });
 
-window.api.onOpenHelp(async () => {
+// 自作メニューバーの「ヘルプ > 使い方 / 注記」からも同じ処理を呼べるよう、名前付き関数にしてある。
+async function openHelpModal() {
   await window.api.hideContentViews();
   helpModal.classList.remove('hidden');
-});
+}
+window.api.onOpenHelp(openHelpModal);
 helpCloseBtn.addEventListener('click', async () => {
   helpModal.classList.add('hidden');
   await window.api.showContentViews();
@@ -360,10 +373,12 @@ helpTabBtns.forEach((btn) => {
   });
 });
 
-window.api.onOpenWelcome(async () => {
+// 自作メニューバーの「ヘルプ > 初回案内」からも同じ処理を呼べるよう、名前付き関数にしてある。
+async function openWelcomeModal() {
   await window.api.hideContentViews();
   welcomeModal.classList.remove('hidden');
-});
+}
+window.api.onOpenWelcome(openWelcomeModal);
 welcomeCloseBtn.addEventListener('click', async () => {
   welcomeModal.classList.add('hidden');
   await window.api.showContentViews();
@@ -392,64 +407,15 @@ const settingsSaveBtn = document.getElementById('settings-save-btn');
 const settingsCloseBtn = document.getElementById('settings-close-btn');
 const parentDomainInput = document.getElementById('parent-domain-input');
 const layoutColumnsInput = document.getElementById('layout-columns-input');
+const commentFontSelect = document.getElementById('comment-font-select');
 const helixClientIdInput = document.getElementById('helix-client-id-input');
 const helixClientSecretInput = document.getElementById('helix-client-secret-input');
 const youtubeApiKeyInput = document.getElementById('youtube-api-key-input');
 const kickClientIdInput = document.getElementById('kick-client-id-input');
 const kickClientSecretInput = document.getElementById('kick-client-secret-input');
-const proAuthBackendUrlInput = document.getElementById('pro-auth-backend-url-input');
 
-// ---- アップデート確認（GitHub Releases: mumeinoapp/multicastdeck） ----
-
-const updaterCurrentVersionEl = document.getElementById('updater-current-version');
-const updaterCheckBtn = document.getElementById('updater-check-btn');
-const updaterMessageEl = document.getElementById('updater-message');
-const updaterInstallBtn = document.getElementById('updater-install-btn');
-
-function setUpdaterMessage(text, isError = false) {
-  updaterMessageEl.textContent = text || '';
-  updaterMessageEl.style.color = isError ? '#f04747' : '';
-}
-
-updaterCheckBtn.addEventListener('click', async () => {
-  updaterCheckBtn.disabled = true;
-  updaterInstallBtn.classList.add('hidden');
-  setUpdaterMessage('確認中…');
-  try {
-    await window.api.checkForUpdate();
-  } finally {
-    updaterCheckBtn.disabled = false;
-  }
-});
-
-updaterInstallBtn.addEventListener('click', () => {
-  window.api.installUpdate();
-});
-
-window.api.onUpdaterStatus((payload) => {
-  switch (payload.state) {
-    case 'checking':
-      setUpdaterMessage('確認中…');
-      break;
-    case 'available':
-      setUpdaterMessage(`新しいバージョン(${payload.version})が見つかりました。ダウンロードします…`);
-      window.api.downloadUpdate();
-      break;
-    case 'not-available':
-      setUpdaterMessage('最新の状態です。');
-      break;
-    case 'downloading':
-      setUpdaterMessage(`ダウンロード中… ${payload.percent}%`);
-      break;
-    case 'downloaded':
-      setUpdaterMessage(`バージョン${payload.version}の準備ができました。`);
-      updaterInstallBtn.classList.remove('hidden');
-      break;
-    case 'error':
-      setUpdaterMessage(`確認できませんでした（${payload.message}）`, true);
-      break;
-  }
-});
+// アップデート確認はメニューバーの「アップデートを確認」（ネイティブメニュー）だけで完結するため、
+// レンダラー側の処理は不要（main.js参照）。
 
 settingsOpenBtn.addEventListener('click', async () => {
   if (!settingsModal.classList.contains('hidden')) {
@@ -457,20 +423,18 @@ settingsOpenBtn.addEventListener('click', async () => {
     return;
   }
   await window.api.openSidePanel('settings', 380);
-  updaterCurrentVersionEl.textContent = await window.api.getAppVersion();
   const s = await window.api.getAllSettings();
   parentDomainInput.value = s.parentDomain;
   layoutColumnsInput.value = s.layoutColumns;
+  commentFontSelect.value = s.commentFontFamily || '';
   helixClientIdInput.value = s.helixClientId;
   helixClientSecretInput.value = s.helixClientSecret;
   youtubeApiKeyInput.value = s.youtubeDataApiKey || '';
   kickClientIdInput.value = s.kickClientId || '';
   kickClientSecretInput.value = s.kickClientSecret || '';
-  proAuthBackendUrlInput.value = s.paymentBackendUrl || '';
   settingsModal.classList.remove('hidden');
   refreshAccountList();
   refreshDropsAutoList();
-  refreshProAuthPanel();
 });
 
 settingsCloseBtn.addEventListener('click', async () => {
@@ -484,19 +448,23 @@ settingsSaveBtn.addEventListener('click', async () => {
   await window.api.setAllSettings({
     parentDomain: parentDomainInput.value.trim() || 'localhost',
     layoutColumns: Number(layoutColumnsInput.value) || 0,
+    commentFontFamily: commentFontSelect.value,
     helixClientId: helixClientIdInput.value.trim(),
     helixClientSecret: helixClientSecretInput.value.trim(),
     youtubeDataApiKey: youtubeApiKeyInput.value.trim(),
     kickClientId: kickClientIdInput.value.trim(),
     kickClientSecret: kickClientSecretInput.value.trim(),
-    paymentBackendUrl: proAuthBackendUrlInput.value.trim(),
   });
+  applyCommentFontFamily(commentFontSelect.value);
   settingsModal.classList.add('hidden');
   await window.api.closeSidePanel('settings');
 });
 
-// ---- Pro会員登録（メール＋確認コード認証） ----
+// ---- 会員登録（メール＋確認コード認証） ----
 
+const proAuthModal = document.getElementById('pro-auth-modal');
+const proAuthCloseBtn = document.getElementById('pro-auth-close-btn');
+const proAuthBackendUrlInput = document.getElementById('pro-auth-backend-url-input');
 const proAuthLoggedOutArea = document.getElementById('pro-auth-logged-out-area');
 const proAuthLoggedInArea = document.getElementById('pro-auth-logged-in-area');
 const proAuthEmailInput = document.getElementById('pro-auth-email-input');
@@ -511,6 +479,62 @@ const proAuthMessage = document.getElementById('pro-auth-message');
 const proCheckoutCardBtn = document.getElementById('pro-checkout-card-btn');
 const proCheckoutMonthsSelect = document.getElementById('pro-checkout-months-select');
 const proCheckoutOtherBtn = document.getElementById('pro-checkout-other-btn');
+
+// メニューバーの「会員登録」（一番右）から開く中央ポップアップ。以前は設定パネルの
+// 一項目だったが独立させたため、開閉はサイドパネル系（openSidePanel等）ではなく
+// help-modal/welcome-modalと同じ「hideContentViewsしてから.hiddenを外す」方式にしている。
+async function openProAuthModal() {
+  await window.api.hideContentViews();
+  proAuthModal.classList.remove('hidden');
+  refreshProAuthPanel();
+}
+proAuthCloseBtn.addEventListener('click', async () => {
+  proAuthModal.classList.add('hidden');
+  await window.api.showContentViews();
+});
+
+// ---- フィードバック（件名・本文のみ。宛先はmumeinoapp@gmail.com固定。main.js参照） ----
+const feedbackModal = document.getElementById('feedback-modal');
+const feedbackCloseBtn = document.getElementById('feedback-close-btn');
+const feedbackSendBtn = document.getElementById('feedback-send-btn');
+const feedbackSubjectInput = document.getElementById('feedback-subject-input');
+const feedbackBodyInput = document.getElementById('feedback-body-input');
+const feedbackMessage = document.getElementById('feedback-message');
+
+async function openFeedbackModal() {
+  await window.api.hideContentViews();
+  feedbackMessage.textContent = '';
+  feedbackModal.classList.remove('hidden');
+}
+feedbackCloseBtn.addEventListener('click', async () => {
+  feedbackModal.classList.add('hidden');
+  await window.api.showContentViews();
+});
+function setFeedbackMessage(text, isError = false) {
+  feedbackMessage.textContent = text || '';
+  feedbackMessage.style.color = isError ? '#f04747' : '';
+}
+
+feedbackSendBtn.addEventListener('click', async () => {
+  const subject = feedbackSubjectInput.value.trim();
+  const body = feedbackBodyInput.value.trim();
+  if (!subject && !body) {
+    setFeedbackMessage('件名か本文のどちらかを入力してください。', true);
+    return;
+  }
+  try {
+    feedbackSendBtn.disabled = true;
+    setFeedbackMessage('送信中…');
+    await window.api.appMenu.sendFeedback(subject, body);
+    setFeedbackMessage('送信しました。ありがとうございます！');
+    feedbackSubjectInput.value = '';
+    feedbackBodyInput.value = '';
+  } catch (err) {
+    setFeedbackMessage(`送信に失敗しました（${err.message || err}）。しばらくしてからもう一度お試しください。`, true);
+  } finally {
+    feedbackSendBtn.disabled = false;
+  }
+});
 
 function setProAuthMessage(text, isError = false) {
   proAuthMessage.textContent = text || '';
@@ -1851,7 +1875,8 @@ function parseIrcPrivmsg(line) {
   const message = msgSepIdx === -1 ? '' : rest.slice(msgSepIdx + 2);
   const username = tags['display-name'] || prefix.split('!')[0] || '?';
   const color = tags['color'] || '';
-  return { channel, username, message, color };
+  const emotesTag = tags['emotes'] || '';
+  return { channel, username, message, color, emotesTag };
 }
 
 function escapeHtml(str) {
@@ -1860,9 +1885,59 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+/**
+ * Twitch IRCのemotesタグ（例: "25:0-4,12-16/1902:6-10"）を解析し、対象範囲を
+ * スタンプ画像<img>に置き換えたHTMLを返す。emotesTagが無い/壊れている場合は
+ * 通常のエスケープ済みテキストにフォールバックする。
+ * 範囲指定はUTF-8バイトオフセットのため、TextEncoder/Decoderでバイト単位に処理する。
+ */
+function buildEmoteAwareMessageHtml(message, emotesTag) {
+  if (!emotesTag) return escapeHtml(message);
+  try {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const bytes = encoder.encode(message);
+    const ranges = [];
+    emotesTag.split('/').forEach((entry) => {
+      const [id, positions] = entry.split(':');
+      if (!id || !positions) return;
+      positions.split(',').forEach((pos) => {
+        const [startStr, endStr] = pos.split('-');
+        const start = parseInt(startStr, 10);
+        const end = parseInt(endStr, 10);
+        if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || end >= bytes.length) return;
+        ranges.push({ id, start, end });
+      });
+    });
+    if (ranges.length === 0) return escapeHtml(message);
+    ranges.sort((a, b) => a.start - b.start);
+
+    let html = '';
+    let cursor = 0;
+    ranges.forEach((r) => {
+      if (r.start < cursor) return; // 重複/不正な範囲はスキップ
+      if (r.start > cursor) {
+        html += escapeHtml(decoder.decode(bytes.slice(cursor, r.start)));
+      }
+      const emoteText = decoder.decode(bytes.slice(r.start, r.end + 1));
+      const src = `https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(r.id)}/default/dark/1.0`;
+      html += `<img class="chat-emote" src="${src}" alt="${escapeHtml(emoteText)}" title="${escapeHtml(
+        emoteText
+      )}">`;
+      cursor = r.end + 1;
+    });
+    if (cursor < bytes.length) {
+      html += escapeHtml(decoder.decode(bytes.slice(cursor)));
+    }
+    return html;
+  } catch (_) {
+    return escapeHtml(message);
+  }
+}
+
 const CHAT_TIMELINE_MAX_LINES = 300;
 
-function appendTimelineMessage({ channel, username, message, color }) {
+function appendTimelineMessage({ channel, username, message, color, emotesTag }) {
   const nearBottom =
     chatIntegrationTimeline.scrollHeight - chatIntegrationTimeline.scrollTop - chatIntegrationTimeline.clientHeight <
     40;
@@ -1870,7 +1945,10 @@ function appendTimelineMessage({ channel, username, message, color }) {
   line.className = 'chat-line';
   line.innerHTML = `<span class="chat-channel">[${escapeHtml(channel)}]</span><span class="chat-user" style="color:${
     color || '#9147ff'
-  }">${escapeHtml(username)}</span>: ${escapeHtml(message)}`;
+  }">${escapeHtml(username)}</span>: <span class="chat-message-text">${buildEmoteAwareMessageHtml(
+    message,
+    emotesTag
+  )}</span>`;
   chatIntegrationTimeline.appendChild(line);
   while (chatIntegrationTimeline.children.length > CHAT_TIMELINE_MAX_LINES) {
     chatIntegrationTimeline.removeChild(chatIntegrationTimeline.firstChild);
@@ -2202,6 +2280,14 @@ function closeTopmostPanelWithEscape() {
     helpCloseBtn.click();
     return;
   }
+  if (!proAuthModal.classList.contains('hidden')) {
+    proAuthCloseBtn.click();
+    return;
+  }
+  if (!feedbackModal.classList.contains('hidden')) {
+    feedbackCloseBtn.click();
+    return;
+  }
 }
 
 document.addEventListener('keydown', (e) => {
@@ -2217,4 +2303,165 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   refreshChips();
   await restoreActionButtonOrder();
   setupActionButtonsDragReorder();
+})();
+
+// ---- 自作メニューバー（ファイル/表示/ヘルプ/バージョン） ----
+// ネイティブのMenuを廃止し、開閉・見た目・「バージョン」の動的な中身をすべてここで描画する。
+// 実処理（終了・再読み込み・アップデート確認など）はmain.js側のapp-menu:*ハンドラに委譲する
+// （window.api.appMenu、preload.js参照）。
+(function setupAppMenuBar() {
+  const appMenuBar = document.getElementById('app-menu-bar');
+  const versionMenuItem = appMenuBar.querySelector('.menu-bar-item[data-menu="version"]');
+  const versionMenuDropdown = document.getElementById('version-menu-dropdown');
+
+  let latestState = null;
+
+  function closeAllMenuBarDropdowns() {
+    appMenuBar.querySelectorAll('.menu-bar-item.open').forEach((el) => el.classList.remove('open'));
+  }
+
+  /** disabledなクリックできない項目（現在の状態表示だけの行）を1つ作る。 */
+  function makeDisabledItem(label) {
+    const el = document.createElement('div');
+    el.className = 'menu-bar-dropdown-item disabled';
+    el.textContent = label;
+    return el;
+  }
+
+  /** クリックできる項目を1つ作る。 */
+  function makeActionItem(label, onClick) {
+    const el = document.createElement('div');
+    el.className = 'menu-bar-dropdown-item';
+    el.textContent = label;
+    el.addEventListener('click', () => {
+      closeAllMenuBarDropdowns();
+      onClick();
+    });
+    return el;
+  }
+
+  function makeSeparator() {
+    const el = document.createElement('div');
+    el.className = 'menu-bar-dropdown-separator';
+    return el;
+  }
+
+  /**
+   * 「バージョン」ドロップダウンの中身を状態に応じて描画する。以前のネイティブメニュー版
+   * （main.jsのbuildUpdaterSubmenu、削除済み）と同じ内容をHTMLで再現している。
+   */
+  function renderVersionDropdown(state) {
+    versionMenuDropdown.innerHTML = '';
+    versionMenuDropdown.appendChild(makeDisabledItem(`現在のバージョン: ${state.appVersion}`));
+    versionMenuDropdown.appendChild(makeSeparator());
+
+    const updater = state.updater || { status: 'idle' };
+    switch (updater.status) {
+      case 'checking':
+        versionMenuDropdown.appendChild(makeDisabledItem('確認中…'));
+        break;
+      case 'available':
+        versionMenuDropdown.appendChild(makeDisabledItem(`新しいバージョン ${updater.version} があります`));
+        versionMenuDropdown.appendChild(makeActionItem('ダウンロードする', () => window.api.appMenu.downloadUpdate()));
+        break;
+      case 'downloading':
+        versionMenuDropdown.appendChild(makeDisabledItem(`ダウンロード中… ${updater.percent}%`));
+        break;
+      case 'downloaded':
+        versionMenuDropdown.appendChild(makeDisabledItem(`バージョン ${updater.version} の準備ができました`));
+        // 「PC自体を再起動する」と誤解されやすいという指摘を受け、「アプリの再起動」であることが
+        // わかるよう文言に(アプリ)を明記。選択肢も1つに戻す（forceRunAfter=trueで常にアプリを
+        // 自動再起動する。インストーラーの終了選択に委ねる「今すぐ更新」単独ボタンは削除した）。
+        versionMenuDropdown.appendChild(makeActionItem('今すぐ更新して再起動(アプリ)', () => window.api.appMenu.installUpdate(true)));
+        break;
+      case 'not-available':
+        versionMenuDropdown.appendChild(makeDisabledItem('最新の状態です'));
+        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', () => window.api.appMenu.checkUpdate()));
+        break;
+      case 'error':
+        versionMenuDropdown.appendChild(makeDisabledItem('確認できませんでした'));
+        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', () => window.api.appMenu.checkUpdate()));
+        break;
+      default:
+        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', () => window.api.appMenu.checkUpdate()));
+    }
+  }
+
+  /** state-changed通知・初回取得の両方で呼ぶ。バッジ表示、動的ラベル、バージョン中身を更新する。 */
+  function renderAppMenuState(state) {
+    latestState = state;
+    versionMenuItem.classList.toggle('has-update-badge', !!state.hasUpdateBadge);
+    renderVersionDropdown(state);
+  }
+
+  appMenuBar.addEventListener('click', async (e) => {
+    const actionEl = e.target.closest('[data-action]');
+    if (actionEl) {
+      closeAllMenuBarDropdowns();
+      const action = actionEl.dataset.action;
+      switch (action) {
+        case 'quit':
+          await window.api.appMenu.quit();
+          break;
+        case 'reload':
+          await window.api.appMenu.reload();
+          break;
+        case 'toggle-devtools':
+          await window.api.appMenu.toggleDevTools();
+          break;
+        case 'relayout':
+          await window.api.appMenu.relayout();
+          break;
+        case 'open-help':
+          openHelpModal();
+          break;
+        case 'open-welcome':
+          openWelcomeModal();
+          break;
+        case 'open-external':
+          await window.api.appMenu.openExternal(actionEl.dataset.url);
+          break;
+        case 'open-pro-auth':
+          openProAuthModal();
+          break;
+        case 'open-feedback':
+          openFeedbackModal();
+          break;
+      }
+      return;
+    }
+    const item = e.target.closest('.menu-bar-item');
+    if (!item) return;
+    const wasOpen = item.classList.contains('open');
+    closeAllMenuBarDropdowns();
+    if (!wasOpen) item.classList.add('open');
+  });
+
+  // メニューが1つ開いている間は、他の項目にマウスを乗せただけで切り替わるようにする
+  // （ネイティブのメニューバーと同じ挙動）。
+  appMenuBar.querySelectorAll('.menu-bar-item').forEach((item) => {
+    item.addEventListener('mouseenter', () => {
+      // 「会員登録」のようにドロップダウンを持たない項目（クリックで即ポップアップを開く
+      // だけの項目）は、ホバーでの自動切り替え対象から外す。
+      if (!item.querySelector('.menu-bar-dropdown')) return;
+      const openItem = appMenuBar.querySelector('.menu-bar-item.open');
+      if (openItem && openItem !== item) {
+        openItem.classList.remove('open');
+        item.classList.add('open');
+      }
+    });
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#app-menu-bar')) closeAllMenuBarDropdowns();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAllMenuBarDropdowns();
+  });
+
+  window.api.appMenu.onStateChanged((state) => renderAppMenuState(state));
+  (async () => {
+    const state = await window.api.appMenu.getState();
+    renderAppMenuState(state);
+  })();
 })();

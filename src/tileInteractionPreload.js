@@ -129,8 +129,15 @@ window.addEventListener(
     document.querySelectorAll('iframe').forEach((f) => {
       f.style.pointerEvents = 'none';
     });
-    // preventDefaultは呼ばない：通常のクリック（再生ボタン・チャット欄操作等）を
+    // preventDefaultは基本的に呼ばない：通常のクリック（再生ボタン・チャット欄操作等）を
     // そのまま素通りさせつつ、並行してウィンドウマネージャー的な移動/リサイズを行う。
+    // ただし「リサイズ用の縁」(dir が空でない)でmousedownした場合に限っては例外的に呼ぶ。
+    // Twitch本体のDOM（タイトル・LIVEバッジ・アバター画像等のオーバーレイ要素）が縁の帯に
+    // 重なっていると、画像の既定のネイティブドラッグ（HTML5 Drag and Drop）がこちらのカスタム
+    // リサイズより先に開始してしまい、以降mousemoveが届かなくなって「数px動くと途切れる」不具合の
+    // 原因になっていた。リサイズ開始時のみpreventDefaultすることでネイティブドラッグ自体の開始を
+    // 抑止する（中央の移動ゾーン・通常クリックには影響しないため、再生ボタン等の操作性は維持される）。
+    if (dir) e.preventDefault();
     ipcRenderer.send('tile-interaction:start', {
       channel: channelName,
       origin: viewTarget,

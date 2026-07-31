@@ -1,14 +1,18 @@
 {
   "name": "multicastdeck",
-  "version": "0.1.0",
+  "version": "0.2.4",
   "description": "Twitch/YouTube/Kick マルチストリーム＋チャット統合＋Drops自動化デスクトップアプリ「MultiCastDeck」",
   "author": "yato",
   "main": "src/main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
+    "clean:release": "node -e \"require('fs').rmSync('release', { recursive: true, force: true })\"",
+    "prebuild": "npm run clean:release",
     "build": "electron-builder",
+    "prebuild:win": "npm run clean:release",
     "build:win": "electron-builder --win",
+    "prerelease": "npm run clean:release",
     "release": "electron-builder --win --publish always"
   },
   "devDependencies": {

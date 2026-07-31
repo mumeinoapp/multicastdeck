@@ -9,8 +9,10 @@
 }
 
 :root {
-  /* #control-bar (84px) + #status-bar (22px)。main.jsのHEADER_HEIGHTと一致させること。 */
-  --header-height: 106px;
+  /* #app-menu-bar (26px) + #control-bar (84px) + #status-bar (22px)。main.jsのHEADER_HEIGHTと一致させること。 */
+  --header-height: 132px;
+  /* 全タブ統合チャットのコメント本文フォント。空/未設定時はinherit（＝配信者名等と同じ既定フォント＝実質Twitchの見た目）。 */
+  --comment-font-family: inherit;
 }
 
 body {
@@ -30,6 +32,101 @@ body {
   line-height: 1.6;
 }
 
+/* 自作メニューバー（ネイティブのMenuは廃止。ファイル/表示/ヘルプ/バージョンの4項目、
+   開閉・中身の描画ロジックはrenderer.js参照）。高さ26pxで:root --header-height と
+   main.jsのHEADER_HEIGHTに合算されているので、高さを変える場合は両方を追従させること。 */
+#app-menu-bar {
+  height: 26px;
+  display: flex;
+  align-items: stretch;
+  background: #1a1a1e;
+  border-bottom: 1px solid #303038;
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.menu-bar-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  cursor: default;
+}
+
+.menu-bar-item:hover,
+.menu-bar-item.open {
+  background: #34343c;
+}
+
+.menu-bar-label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 「バージョン」ラベル右上の赤丸バッジ。スマホアプリの未読通知バッジと同じ考え方で、
+   ラベルテキストに対して絶対配置＋はみ出しで重ねる。更新が見つかっている間だけ表示する
+   （renderer.jsのrenderAppMenuState参照）。 */
+.menu-badge {
+  position: absolute;
+  top: -3px;
+  right: -8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e5484d;
+  box-shadow: 0 0 0 1px #1a1a1e;
+  display: none;
+}
+
+.menu-bar-item.has-update-badge .menu-badge {
+  display: block;
+}
+
+.menu-bar-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 260px;
+  background: #26262c;
+  border: 1px solid #3a3a42;
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  padding: 4px 0;
+  z-index: 10000;
+}
+
+.menu-bar-item.open .menu-bar-dropdown {
+  display: block;
+}
+
+.menu-bar-dropdown-item {
+  padding: 6px 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: #efeff1;
+}
+
+.menu-bar-dropdown-item:hover {
+  background: #3a3a44;
+}
+
+.menu-bar-dropdown-item.disabled {
+  color: #7a7a82;
+  cursor: default;
+}
+
+.menu-bar-dropdown-item.disabled:hover {
+  background: none;
+}
+
+.menu-bar-dropdown-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: #3a3a42;
+}
+
 /* コンテンツを上詰めにし、下の境界線と被らないよう下側にだけ余白を残す
    （以前はalign-items:centerで上下均等の余白になっていたが、上側の余白が目立って見えるとの
    指摘を受けて上詰めに変更）。 */
@@ -41,6 +138,11 @@ body {
   padding: 6px 12px 8px;
   background: #1f1f23;
   border-bottom: 1px solid #303038;
+  /* 子要素（チャンネルチップ欄・操作ボタン群・右端固定ボタン）はいずれも縮まない固定幅のため、
+     ウィンドウの最小幅(main.jsのminWidth)を下回ることは無い想定だが、万一収まりきらない場合に
+     要素が画面外へ押し出されて操作不能になることを避けるための保険として横スクロールを許可する。 */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .group {
@@ -284,9 +386,9 @@ button:hover:not(:disabled) {
   /* 実際の描画は BrowserView がこの領域に重なって行う */
 }
 
-#help-modal.hidden, #welcome-modal.hidden, #premium-locked-modal.hidden { display: none; }
+#help-modal.hidden, #welcome-modal.hidden, #premium-locked-modal.hidden, #pro-auth-modal.hidden, #feedback-modal.hidden { display: none; }
 
-#help-modal, #welcome-modal, #premium-locked-modal {
+#help-modal, #welcome-modal, #premium-locked-modal, #pro-auth-modal, #feedback-modal {
   position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.6);
@@ -300,6 +402,68 @@ button:hover:not(:disabled) {
   max-width: 640px;
   max-height: 80vh;
   overflow-y: auto;
+}
+
+/* 会員登録ポップアップ（メニューバーの「会員登録」から開く。以前は設定パネル内の
+   一項目だったが独立させた）。ボタンが横幅いっぱいに伸びる.modal-content内の素のbuttonは
+   margin-topが無く、直前のinput/labelと詰まって「被って見える」原因になっていたため、
+   このポップアップ内のbutton/selectにだけ明示的にwidth:100%とmargin-topを指定して間隔を空ける。 */
+.pro-auth-modal-content {
+  max-width: 420px;
+  width: 90%;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.pro-auth-modal-content button {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.pro-auth-modal-content select {
+  display: block;
+  width: 100%;
+  background: #2c2c35;
+  border: 1px solid #3a3a45;
+  color: #fff;
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin-top: 4px;
+}
+
+.pro-auth-modal-content .modal-actions {
+  margin-top: 16px;
+}
+
+.pro-auth-modal-content .modal-actions button {
+  margin-top: 0;
+}
+
+/* フィードバック（件名・本文のみ）。.modal-content input の width:100% はtextareaには効かないため、
+   別途同じ見た目のルールを用意している。placeholderは薄いグレーになるようブラウザ既定より
+   さらに一段階トーンを落として、本文欄に「入力前提の案内文」だと分かるようにしている。 */
+.feedback-modal-content {
+  max-width: 460px;
+  width: 90%;
+}
+
+.feedback-modal-content textarea {
+  display: block;
+  width: 100%;
+  background: #2c2c35;
+  border: 1px solid #3a3a45;
+  color: #fff;
+  padding: 8px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.feedback-modal-content textarea::placeholder {
+  color: #6a6a75;
 }
 
 .help-tabs {
@@ -365,6 +529,13 @@ button:hover:not(:disabled) {
   padding: 24px;
   border-radius: 8px;
   max-width: 480px;
+}
+
+/* 見出し(h2)にブラウザ既定のmargin-top（約0.83em）が付いたままだと、.modal-contentの
+   padding-top(24px)と合算されて見出しの上に無駄な余白ができる（会員登録/フィードバック等の
+   実機報告）。見出しは常にパネルの一番上に来るため、上側の既定マージンだけ0にリセットする。 */
+.modal-content h2 {
+  margin-top: 0;
 }
 
 .modal-content li {
@@ -1048,6 +1219,18 @@ button:hover:not(:disabled) {
 .chat-integration-timeline .chat-user {
   font-weight: 600;
   margin-right: 4px;
+}
+
+/* コメント本文のみフォント変更可能（配信名・ユーザー名は対象外）。設定未指定時はinherit。 */
+.chat-integration-timeline .chat-message-text {
+  font-family: var(--comment-font-family, inherit);
+}
+
+.chat-integration-timeline .chat-emote {
+  height: 1.4em;
+  width: auto;
+  vertical-align: middle;
+  margin: 0 1px;
 }
 
 .chat-integration-send-row {

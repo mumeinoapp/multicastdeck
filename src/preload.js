@@ -108,19 +108,17 @@ contextBridge.exposeInMainWorld('api', {
   onZappingStatus: (cb) => ipcRenderer.on('zapping:status', (_e, payload) => cb(payload)),
   onZappingError: (cb) => ipcRenderer.on('zapping:error', (_e, payload) => cb(payload)),
 
-  onOpenHelp: (cb) => ipcRenderer.on('ui:open-help', () => cb()),
   onOpenWelcome: (cb) => ipcRenderer.on('ui:open-welcome', () => cb()),
   getFirstLaunchDone: () => ipcRenderer.invoke('app:get-first-launch-done'),
   setFirstLaunchDone: () => ipcRenderer.invoke('app:set-first-launch-done'),
 
   getPremiumUnlocked: () => ipcRenderer.invoke('app:get-premium-unlocked'),
-  setPremiumUnlocked: (value) => ipcRenderer.invoke('app:set-premium-unlocked', value),
   onPremiumChanged: (cb) => ipcRenderer.on('premium:changed', (_e, value) => cb(value)),
 
   getHeaderButtonOrder: () => ipcRenderer.invoke('ui:get-header-button-order'),
   setHeaderButtonOrder: (order) => ipcRenderer.invoke('ui:set-header-button-order', order),
 
-  // Pro会員登録（メール＋確認コード認証、multistream-payment-backend連携）
+  // 会員登録（メール＋確認コード認証、multistream-payment-backend連携）
   getProAuthConfig: () => ipcRenderer.invoke('pro-auth:get-config'),
   setPaymentBackendUrl: (url) => ipcRenderer.invoke('pro-auth:set-backend-url', url),
   requestProAuthCode: (email) => ipcRenderer.invoke('pro-auth:request-code', email),
@@ -129,10 +127,21 @@ contextBridge.exposeInMainWorld('api', {
   logoutProAuth: () => ipcRenderer.invoke('pro-auth:logout'),
   startProCheckout: (method, months) => ipcRenderer.invoke('pro-auth:start-checkout', { method, months }),
 
-  // アップデート確認（GitHub Releases経由）
-  getAppVersion: () => ipcRenderer.invoke('updater:get-version'),
-  checkForUpdate: () => ipcRenderer.invoke('updater:check'),
-  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
-  installUpdate: () => ipcRenderer.invoke('updater:install'),
-  onUpdaterStatus: (cb) => ipcRenderer.on('updater:status', (_e, payload) => cb(payload)),
+  onOpenHelp: (cb) => ipcRenderer.on('ui:open-help', () => cb()),
+
+  // 自作メニューバー（ファイル/表示/ヘルプ/バージョン。ネイティブのMenuは廃止済み。index.html
+  // #app-menu-bar、renderer.js参照）。実処理はmain.js側のapp-menu:*ハンドラに委譲する。
+  appMenu: {
+    getState: () => ipcRenderer.invoke('app-menu:get-state'),
+    onStateChanged: (cb) => ipcRenderer.on('app-menu:state-changed', (_e, state) => cb(state)),
+    quit: () => ipcRenderer.invoke('app-menu:quit'),
+    reload: () => ipcRenderer.invoke('app-menu:reload'),
+    toggleDevTools: () => ipcRenderer.invoke('app-menu:toggle-devtools'),
+    relayout: () => ipcRenderer.invoke('app-menu:relayout'),
+    openExternal: (url) => ipcRenderer.invoke('app-menu:open-external', url),
+    checkUpdate: () => ipcRenderer.invoke('app-menu:check-update'),
+    downloadUpdate: () => ipcRenderer.invoke('app-menu:download-update'),
+    installUpdate: (forceRunAfter) => ipcRenderer.invoke('app-menu:install-update', { forceRunAfter: !!forceRunAfter }),
+    sendFeedback: (subject, body) => ipcRenderer.invoke('app-menu:send-feedback', { subject, body }),
+  },
 });
