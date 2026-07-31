@@ -1322,6 +1322,17 @@ function syncPinCheckboxAcrossLists(channel, checked) {
   if (allItem && allItem.isPinned !== checked) allItem.isPinned = checked;
 }
 
+/**
+ * 「自動追加の対象にする」チェックボックスのtitle（ホバー時の詳細説明）。
+ * インライン注記は「使い方/注記」参照に短縮したため、実際の詳細はここでの
+ * ホバー説明と使い方/注記モーダル側にのみ持たせている。
+ */
+function autoTuneInTargetTitle(platform) {
+  return platform === 'youtube'
+    ? '自動追加の対象にする（YouTubeはチェックを付けないと自動追加されません）'
+    : '自動追加の対象にする（チェックした配信者のみが対象になります）';
+}
+
 /** プラットフォームバッジのHTML。YouTubeは公式カラーの赤にするため絵文字ではなくCSS着色のアイコンを使う。 */
 function platformBadgeHtml(platform) {
   if (platform === 'youtube') return '<span class="unified-feed-platform-badge youtube">▶</span>';
@@ -1358,7 +1369,7 @@ function renderUnifiedFeedList() {
     const targetHtml =
       item.platform === 'kick'
         ? '<span class="unified-feed-target-spacer"></span>'
-        : `<input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="自動追加の対象にする" />`;
+        : `<input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="${autoTuneInTargetTitle(item.platform)}" />`;
     row.innerHTML = `
       ${targetHtml}
       ${pinHtml}
@@ -1426,7 +1437,7 @@ function renderAllFollowList() {
         ? `<input type="checkbox" class="unified-feed-pin-checkbox" ${item.isPinned ? 'checked' : ''} title="常に表示（ピン留め、オンライン/オフライン問わず自分で外すまで表示し続ける）" />`
         : '<span class="unified-feed-pin-spacer"></span>';
     row.innerHTML = `
-      <input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="自動追加の対象にする" />
+      <input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="${autoTuneInTargetTitle(item.platform)}" />
       ${pinHtml}
       ${platformBadgeHtml(item.platform)}
       <span class="unified-feed-name">${escapeHtml(item.displayName)}</span>
@@ -2320,6 +2331,17 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     appMenuBar.querySelectorAll('.menu-bar-item.open').forEach((el) => el.classList.remove('open'));
   }
 
+  // ファイル/表示/バージョンのドロップダウンはBrowserView（配信タイル）より背後に描画されて
+  // しまう不具合があった（BrowserViewはCSSのz-indexとは無関係に常にHTML描画の手前に来るため）。
+  // help-modal等と同じ「開く前にhideContentViews、閉じたらshowContentViews」方式で解消する。
+  // ただしヘルプ/初回案内/会員登録/フィードバック（open-help等）は開いた先のモーダル自身が
+  // 同じ処理を行うため、ここではshowContentViewsを呼ばない（一瞬表示→非表示のちらつき防止）。
+  async function closeMenuBarDropdownsAndRestoreViews() {
+    const hadOpen = !!appMenuBar.querySelector('.menu-bar-item.open');
+    closeAllMenuBarDropdowns();
+    if (hadOpen) await window.api.showContentViews();
+  }
+
   /** disabledなクリックできない項目（現在の状態表示だけの行）を1つ作る。 */
   function makeDisabledItem(label) {
     const el = document.createElement('div');
@@ -2333,8 +2355,12 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     const el = document.createElement('div');
     el.className = 'menu-bar-dropdown-item';
     el.textContent = label;
-    el.addEventListener('click', () => {
-      closeAllMenuBarDropdowns();
+    el.addEventListener('click', async (e) => {
+      // data-action属性を持たないため、ここで止めないとクリックがappMenuBarの
+      // クリックハンドラまでバブリングし、「.menu-bar-item」判定分岐に落ちて
+      // バージョンドロップダウンが再度開いてしまう（閉じたはずが開き直る不具合）。
+      e.stopPropagation();
+      await closeMenuBarDropdownsAndRestoreViews();
       onClick();
     });
     return el;
@@ -2397,8 +2423,16 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   appMenuBar.addEventListener('click', async (e) => {
     const actionEl = e.target.closest('[data-action]');
     if (actionEl) {
-      closeAllMenuBarDropdowns();
       const action = actionEl.dataset.action;
+      // open-help/open-welcome/open-pro-auth/open-feedbackは、開いた先のモーダル自身が
+      // hideContentViewsを行うのでここでは復元しない（closeAllMenuBarDropdownsのみ）。
+      // それ以外は「メニューを閉じて終わり」の操作なのでコンテンツ表示を復元する。
+      const restoresViews = !['open-help', 'open-welcome', 'open-pro-auth', 'open-feedback'].includes(action);
+      if (restoresViews) {
+        await closeMenuBarDropdownsAndRestoreViews();
+      } else {
+        closeAllMenuBarDropdowns();
+      }
       switch (action) {
         case 'quit':
           await window.api.appMenu.quit();
@@ -2433,8 +2467,13 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     const item = e.target.closest('.menu-bar-item');
     if (!item) return;
     const wasOpen = item.classList.contains('open');
+    if (wasOpen) {
+      await closeMenuBarDropdownsAndRestoreViews();
+      return;
+    }
     closeAllMenuBarDropdowns();
-    if (!wasOpen) item.classList.add('open');
+    item.classList.add('open');
+    if (item.querySelector('.menu-bar-dropdown')) await window.api.hideContentViews();
   });
 
   // メニューが1つ開いている間は、他の項目にマウスを乗せただけで切り替わるようにする
@@ -2453,10 +2492,10 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   });
 
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('#app-menu-bar')) closeAllMenuBarDropdowns();
+    if (!e.target.closest('#app-menu-bar')) closeMenuBarDropdownsAndRestoreViews();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeAllMenuBarDropdowns();
+    if (e.key === 'Escape') closeMenuBarDropdownsAndRestoreViews();
   });
 
   window.api.appMenu.onStateChanged((state) => renderAppMenuState(state));
