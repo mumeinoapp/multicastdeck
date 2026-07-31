@@ -1897,10 +1897,26 @@ function escapeHtml(str) {
 }
 
 /**
+ * 指定バイト位置がUTF-8文字の先頭（文字境界）かどうかを判定する。
+ * 継続バイト（0x80-0xBF、上位ビットが10xxxxxx）の位置は文字の途中なので境界ではない。
+ * 稀にTwitch側のemotesタグのオフセットがずれている場合や、マルチバイト文字（絵文字・
+ * 日本語等）を含むメッセージで範囲がずれた場合に、UTF-8シーケンスを分断して
+ * デコードすると文字化け（U+FFFD）になるため、その予防チェックに使う。
+ */
+function isUtf8CharBoundary(bytes, index) {
+  if (index <= 0 || index >= bytes.length) return true;
+  return (bytes[index] & 0xc0) !== 0x80;
+}
+
+/**
  * Twitch IRCのemotesタグ（例: "25:0-4,12-16/1902:6-10"）を解析し、対象範囲を
  * スタンプ画像<img>に置き換えたHTMLを返す。emotesTagが無い/壊れている場合は
  * 通常のエスケープ済みテキストにフォールバックする。
  * 範囲指定はUTF-8バイトオフセットのため、TextEncoder/Decoderでバイト単位に処理する。
+ * 絵文字・日本語等のマルチバイト文字を含むメッセージで稀に範囲がずれることがあり、
+ * その場合は文字の途中でバイト列を切ってしまい文字化け（U+FFFD）が発生するため、
+ * 範囲の開始・終了が文字境界と一致しないものは安全側に倒して個別にスキップする
+ * （メッセージ全体はフォールバックさせず、そのスタンプ1個だけテキスト表示に留める）。
  */
 function buildEmoteAwareMessageHtml(message, emotesTag) {
   if (!emotesTag) return escapeHtml(message);
@@ -1917,6 +1933,9 @@ function buildEmoteAwareMessageHtml(message, emotesTag) {
         const start = parseInt(startStr, 10);
         const end = parseInt(endStr, 10);
         if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || end >= bytes.length) return;
+        // 開始・終了(の次のバイト)が文字境界からずれている場合、Twitch側のオフセット不整合
+        // が疑われるため、この範囲は画像化せず通常テキストとして残す（文字化け防止）。
+        if (!isUtf8CharBoundary(bytes, start) || !isUtf8CharBoundary(bytes, end + 1)) return;
         ranges.push({ id, start, end });
       });
     });
@@ -1932,9 +1951,12 @@ function buildEmoteAwareMessageHtml(message, emotesTag) {
       }
       const emoteText = decoder.decode(bytes.slice(r.start, r.end + 1));
       const src = `https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(r.id)}/default/dark/1.0`;
+      // CDN側にその解像度/テーマの画像が無い等で読み込みに失敗した場合、ブロークン
+      // イメージのアイコン＋altテキストが表示されてしまい文字化けのように見えるため、
+      // 失敗時はプレーンテキストのノードに置き換えて自然に読める状態にフォールバックする。
       html += `<img class="chat-emote" src="${src}" alt="${escapeHtml(emoteText)}" title="${escapeHtml(
         emoteText
-      )}">`;
+      )}" onerror="this.replaceWith(document.createTextNode(this.alt));this.onerror=null;">`;
       cursor = r.end + 1;
     });
     if (cursor < bytes.length) {
