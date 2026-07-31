@@ -2353,17 +2353,6 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     appMenuBar.querySelectorAll('.menu-bar-item.open').forEach((el) => el.classList.remove('open'));
   }
 
-  // ファイル/表示/バージョンのドロップダウンはBrowserView（配信タイル）より背後に描画されて
-  // しまう不具合があった（BrowserViewはCSSのz-indexとは無関係に常にHTML描画の手前に来るため）。
-  // help-modal等と同じ「開く前にhideContentViews、閉じたらshowContentViews」方式で解消する。
-  // ただしヘルプ/初回案内/会員登録/フィードバック（open-help等）は開いた先のモーダル自身が
-  // 同じ処理を行うため、ここではshowContentViewsを呼ばない（一瞬表示→非表示のちらつき防止）。
-  async function closeMenuBarDropdownsAndRestoreViews() {
-    const hadOpen = !!appMenuBar.querySelector('.menu-bar-item.open');
-    closeAllMenuBarDropdowns();
-    if (hadOpen) await window.api.showContentViews();
-  }
-
   /** disabledなクリックできない項目（現在の状態表示だけの行）を1つ作る。 */
   function makeDisabledItem(label) {
     const el = document.createElement('div');
@@ -2377,12 +2366,12 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     const el = document.createElement('div');
     el.className = 'menu-bar-dropdown-item';
     el.textContent = label;
-    el.addEventListener('click', async (e) => {
+    el.addEventListener('click', (e) => {
       // data-action属性を持たないため、ここで止めないとクリックがappMenuBarの
       // クリックハンドラまでバブリングし、「.menu-bar-item」判定分岐に落ちて
       // バージョンドロップダウンが再度開いてしまう（閉じたはずが開き直る不具合）。
       e.stopPropagation();
-      await closeMenuBarDropdownsAndRestoreViews();
+      closeAllMenuBarDropdowns();
       onClick();
     });
     return el;
@@ -2445,16 +2434,8 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   appMenuBar.addEventListener('click', async (e) => {
     const actionEl = e.target.closest('[data-action]');
     if (actionEl) {
+      closeAllMenuBarDropdowns();
       const action = actionEl.dataset.action;
-      // open-help/open-welcome/open-pro-auth/open-feedbackは、開いた先のモーダル自身が
-      // hideContentViewsを行うのでここでは復元しない（closeAllMenuBarDropdownsのみ）。
-      // それ以外は「メニューを閉じて終わり」の操作なのでコンテンツ表示を復元する。
-      const restoresViews = !['open-help', 'open-welcome', 'open-pro-auth', 'open-feedback'].includes(action);
-      if (restoresViews) {
-        await closeMenuBarDropdownsAndRestoreViews();
-      } else {
-        closeAllMenuBarDropdowns();
-      }
       switch (action) {
         case 'quit':
           await window.api.appMenu.quit();
@@ -2489,13 +2470,8 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     const item = e.target.closest('.menu-bar-item');
     if (!item) return;
     const wasOpen = item.classList.contains('open');
-    if (wasOpen) {
-      await closeMenuBarDropdownsAndRestoreViews();
-      return;
-    }
     closeAllMenuBarDropdowns();
-    item.classList.add('open');
-    if (item.querySelector('.menu-bar-dropdown')) await window.api.hideContentViews();
+    if (!wasOpen) item.classList.add('open');
   });
 
   // メニューが1つ開いている間は、他の項目にマウスを乗せただけで切り替わるようにする
@@ -2514,10 +2490,10 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   });
 
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('#app-menu-bar')) closeMenuBarDropdownsAndRestoreViews();
+    if (!e.target.closest('#app-menu-bar')) closeAllMenuBarDropdowns();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeMenuBarDropdownsAndRestoreViews();
+    if (e.key === 'Escape') closeAllMenuBarDropdowns();
   });
 
   window.api.appMenu.onStateChanged((state) => renderAppMenuState(state));
