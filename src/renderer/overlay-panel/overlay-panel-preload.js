@@ -21,4 +21,15 @@ contextBridge.exposeInMainWorld('overlayApi', {
   // 破棄されるため、メインプロセス側にドラフトを保持する）。
   getFeedbackDraft: () => ipcRenderer.invoke('ui:get-feedback-draft'),
   setFeedbackDraft: (subject, body) => ipcRenderer.invoke('ui:set-feedback-draft', { subject, body }),
+
+  // 会員登録（pro-auth）移植分（2026-08-08）。IPCチャンネル名はsrc/preload.jsの同名メソッドと
+  // 完全に一致させてある（main.js側のpro-auth:*ハンドラ・決済ロジックを共用するため、
+  // 呼び出し口が増えるだけで処理は変えていない）。
+  getProAuthConfig: () => ipcRenderer.invoke('pro-auth:get-config'),
+  setPaymentBackendUrl: (url) => ipcRenderer.invoke('pro-auth:set-backend-url', url),
+  requestProAuthCode: (email) => ipcRenderer.invoke('pro-auth:request-code', email),
+  verifyProAuthCode: (email, code) => ipcRenderer.invoke('pro-auth:verify-code', { email, code }),
+  refreshProAuthStatus: () => ipcRenderer.invoke('pro-auth:refresh-status'),
+  logoutProAuth: () => ipcRenderer.invoke('pro-auth:logout'),
+  startProCheckout: (method, months) => ipcRenderer.invoke('pro-auth:start-checkout', { method, months }),
 });

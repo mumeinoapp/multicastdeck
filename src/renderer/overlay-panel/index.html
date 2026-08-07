@@ -28,10 +28,11 @@
       <div class="overlay-panel-body" id="overlay-panel-body">準備中</div>
     </div>
 
-    <!-- 以下4つは元々メインウィンドウのindex.htmlにあったモーダルをそのまま移植したもの
+    <!-- 以下5つは元々メインウィンドウのindex.htmlにあったモーダルをそのまま移植したもの
          （MCD大規模アプデ: 配信を消さないオーバーレイ方式への移行）。DOM構造・id・class名は
          元のindex.html/style.cssと完全に一致させてあり、見た目・挙動を変えていない。
-         会員登録(#pro-auth-modal)は決済フローが絡むため今回は対象外（次回セッションで対応）。 -->
+         会員登録(#pro-auth-modal)は2026-08-08にこちらへ移植済み（決済(Stripe Checkout)自体は
+         main.js側でshell.openExternalにより外部ブラウザへ委譲する既存方式のまま変更していない）。 -->
     <div id="help-modal" class="hidden">
       <div class="modal-content help-modal-content">
         <h2>📖 使い方 / 注記</h2>
@@ -160,6 +161,59 @@
         <div class="modal-actions">
           <button id="feedback-send-btn">送信</button>
           <button id="feedback-close-btn">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 会員登録（メールアドレス＋6桁確認コードでのログイン・お申し込み）。2026-08-08、
+         メインウィンドウのindex.htmlから移植（DOM構造・id・classは完全に一致させてあり、
+         見た目・挙動は変えていない）。 -->
+    <div id="pro-auth-modal" class="hidden">
+      <div class="modal-content pro-auth-modal-content">
+        <h2>会員登録</h2>
+        <p class="note">メールアドレスだけで登録・ログインできます（パスワードは不要です）。ログインすると、加入中のPro機能が自動的に使えるようになります。未加入の場合は下から購入できます。</p>
+
+        <label>接続先サーバーURL（通常はそのままで大丈夫です）</label>
+        <p class="note">会員登録機能が通信する専用サーバーのアドレスです。あらかじめ設定済みのため、基本的に変更する必要はありません。</p>
+        <input id="pro-auth-backend-url-input" type="text" placeholder="例: https://multicastdeck.xxxx.workers.dev" />
+
+        <div id="pro-auth-logged-out-area">
+          <label>メールアドレス</label>
+          <input id="pro-auth-email-input" type="email" placeholder="you@example.com" />
+          <button id="pro-auth-request-code-btn">確認コードを送信</button>
+
+          <label>確認コード（6桁）</label>
+          <input id="pro-auth-code-input" type="text" inputmode="numeric" maxlength="6" placeholder="123456" />
+          <button id="pro-auth-verify-code-btn">コードを確認してログイン</button>
+        </div>
+
+        <div id="pro-auth-logged-in-area" class="hidden">
+          <p class="note">ログイン中: <span id="pro-auth-logged-in-email"></span></p>
+          <p class="note">Pro状態: <span id="pro-auth-status-text"></span></p>
+          <button id="pro-auth-refresh-status-btn">最新の状態に更新</button>
+          <button id="pro-auth-logout-btn">ログアウト</button>
+
+          <div id="pro-checkout-area">
+            <p class="note">
+              購入手続きはブラウザで開きます。カードは毎月自動更新、銀行振込・PayPayは選んだ期間分の1回払いです。
+            </p>
+
+            <button id="pro-checkout-card-btn">カードで購入（月額・自動更新）</button>
+
+            <label>期間を選んで購入（銀行振込・PayPay）</label>
+            <select id="pro-checkout-months-select">
+              <option value="1">1か月</option>
+              <option value="6">6か月（10%引き）</option>
+              <option value="12">12か月（20%引き）</option>
+            </select>
+            <button id="pro-checkout-other-btn">選んだ期間で購入</button>
+          </div>
+        </div>
+
+        <div id="pro-auth-message" class="note"></div>
+
+        <div class="modal-actions">
+          <button id="pro-auth-close-btn">閉じる</button>
         </div>
       </div>
     </div>

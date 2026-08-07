@@ -870,38 +870,13 @@ settingsSaveBtn.addEventListener('click', async () => {
   await window.api.closeSidePanel('settings');
 });
 
-// ---- 会員登録（メール＋確認コード認証） ----
-
-const proAuthModal = document.getElementById('pro-auth-modal');
-const proAuthCloseBtn = document.getElementById('pro-auth-close-btn');
-const proAuthBackendUrlInput = document.getElementById('pro-auth-backend-url-input');
-const proAuthLoggedOutArea = document.getElementById('pro-auth-logged-out-area');
-const proAuthLoggedInArea = document.getElementById('pro-auth-logged-in-area');
-const proAuthEmailInput = document.getElementById('pro-auth-email-input');
-const proAuthCodeInput = document.getElementById('pro-auth-code-input');
-const proAuthRequestCodeBtn = document.getElementById('pro-auth-request-code-btn');
-const proAuthVerifyCodeBtn = document.getElementById('pro-auth-verify-code-btn');
-const proAuthLoggedInEmail = document.getElementById('pro-auth-logged-in-email');
-const proAuthStatusText = document.getElementById('pro-auth-status-text');
-const proAuthRefreshStatusBtn = document.getElementById('pro-auth-refresh-status-btn');
-const proAuthLogoutBtn = document.getElementById('pro-auth-logout-btn');
-const proAuthMessage = document.getElementById('pro-auth-message');
-const proCheckoutCardBtn = document.getElementById('pro-checkout-card-btn');
-const proCheckoutMonthsSelect = document.getElementById('pro-checkout-months-select');
-const proCheckoutOtherBtn = document.getElementById('pro-checkout-other-btn');
-
-// メニューバーの「会員登録」（一番右）から開く中央ポップアップ。以前は設定パネルの
-// 一項目だったが独立させたため、開閉はサイドパネル系（openSidePanel等）ではなく
-// help-modal/welcome-modalと同じ「hideContentViewsしてから.hiddenを外す」方式にしている。
+// ---- 会員登録（メール＋確認コード認証、決済フロー） ----
+// 2026-08-08: 配信を消さないオーバーレイ方式（openOverlayPanel）へ移植済み。中身
+// （ログイン・購入導線・決済関連ロジックの呼び出し）はoverlay-panel/overlay-panel.jsへ
+// そのまま移した（main.js側のpro-auth:*ハンドラ・決済ロジックは一切変更していない）。
 async function openProAuthModal() {
-  await window.api.hideContentViews();
-  proAuthModal.classList.remove('hidden');
-  refreshProAuthPanel();
+  await openOverlayPanelSafe('pro-auth');
 }
-proAuthCloseBtn.addEventListener('click', async () => {
-  proAuthModal.classList.add('hidden');
-  await window.api.showContentViews();
-});
 
 // ---- フィードバック（件名・本文のみ。宛先はmumeinoapp@gmail.com固定。main.js参照） ----
 // 2026-08-07: 配信を消さないオーバーレイ方式（openOverlayPanel）へ移植済み。中身
@@ -910,120 +885,6 @@ proAuthCloseBtn.addEventListener('click', async () => {
 async function openFeedbackModal() {
   await openOverlayPanelSafe('feedback');
 }
-
-function setProAuthMessage(text, isError = false) {
-  proAuthMessage.textContent = text || '';
-  proAuthMessage.style.color = isError ? '#f04747' : '';
-}
-
-function describeProStatus(status) {
-  if (!status) return '確認中…';
-  if (status.error) return `確認できませんでした（${status.error}）`;
-  const active = !!(status.active || status.premiumUnlocked);
-  return active ? '有効（Pro機能アンロック中）' : '未加入、または期限切れ';
-}
-
-async function refreshProAuthPanel() {
-  const config = await window.api.getProAuthConfig();
-  proAuthBackendUrlInput.value = config.backendUrl || '';
-  if (config.loggedIn) {
-    proAuthLoggedOutArea.classList.add('hidden');
-    proAuthLoggedInArea.classList.remove('hidden');
-    proAuthLoggedInEmail.textContent = config.email || '';
-    proAuthStatusText.textContent = describeProStatus(config.proStatus);
-  } else {
-    proAuthLoggedOutArea.classList.remove('hidden');
-    proAuthLoggedInArea.classList.add('hidden');
-  }
-}
-
-proAuthRequestCodeBtn.addEventListener('click', async () => {
-  setProAuthMessage('');
-  const email = proAuthEmailInput.value.trim();
-  if (!email) {
-    setProAuthMessage('メールアドレスを入力してください', true);
-    return;
-  }
-  // バックエンドURLを未保存のまま使えるよう、コード送信前に反映しておく
-  await window.api.setPaymentBackendUrl(proAuthBackendUrlInput.value.trim());
-  try {
-    proAuthRequestCodeBtn.disabled = true;
-    await window.api.requestProAuthCode(email);
-    setProAuthMessage('確認コードを送信しました。メールをご確認ください。');
-  } catch (err) {
-    setProAuthMessage(String(err.message || err), true);
-  } finally {
-    proAuthRequestCodeBtn.disabled = false;
-  }
-});
-
-proAuthVerifyCodeBtn.addEventListener('click', async () => {
-  setProAuthMessage('');
-  const email = proAuthEmailInput.value.trim();
-  const code = proAuthCodeInput.value.trim();
-  if (!email || !code) {
-    setProAuthMessage('メールアドレスと確認コードを入力してください', true);
-    return;
-  }
-  try {
-    proAuthVerifyCodeBtn.disabled = true;
-    await window.api.verifyProAuthCode(email, code);
-    proAuthCodeInput.value = '';
-    setProAuthMessage('ログインしました。');
-    await refreshProAuthPanel();
-  } catch (err) {
-    setProAuthMessage(String(err.message || err), true);
-  } finally {
-    proAuthVerifyCodeBtn.disabled = false;
-  }
-});
-
-proAuthRefreshStatusBtn.addEventListener('click', async () => {
-  setProAuthMessage('');
-  try {
-    proAuthRefreshStatusBtn.disabled = true;
-    await window.api.refreshProAuthStatus();
-    setProAuthMessage('最新の状態に更新しました。');
-    await refreshProAuthPanel();
-  } catch (err) {
-    setProAuthMessage(String(err.message || err), true);
-  } finally {
-    proAuthRefreshStatusBtn.disabled = false;
-  }
-});
-
-proAuthLogoutBtn.addEventListener('click', async () => {
-  await window.api.logoutProAuth();
-  setProAuthMessage('ログアウトしました。');
-  await refreshProAuthPanel();
-});
-
-proCheckoutCardBtn.addEventListener('click', async () => {
-  setProAuthMessage('');
-  try {
-    proCheckoutCardBtn.disabled = true;
-    await window.api.startProCheckout('card');
-    setProAuthMessage('ブラウザで決済ページを開きました。お手続き後、「最新の状態に更新」で反映を確認してください。');
-  } catch (err) {
-    setProAuthMessage(String(err.message || err), true);
-  } finally {
-    proCheckoutCardBtn.disabled = false;
-  }
-});
-
-proCheckoutOtherBtn.addEventListener('click', async () => {
-  setProAuthMessage('');
-  const months = Number(proCheckoutMonthsSelect.value) || 1;
-  try {
-    proCheckoutOtherBtn.disabled = true;
-    await window.api.startProCheckout('other', months);
-    setProAuthMessage('ブラウザで決済ページを開きました。お手続き後、「最新の状態に更新」で反映を確認してください。');
-  } catch (err) {
-    setProAuthMessage(String(err.message || err), true);
-  } finally {
-    proCheckoutOtherBtn.disabled = false;
-  }
-});
 
 // ---- スタンプ（エモート）パネル ----
 
@@ -3053,13 +2914,10 @@ function closeTopmostPanelWithEscape() {
   }
   // 音量ミキサーは2026-08-07にfloating-dropdown化済みのため、この関数の先頭にある
   // closeVolumeMixerDropdown()呼び出しで既にカバーされている。
-  // help/welcome/premium-locked/feedbackは2026-08-07に配信を消さないオーバーレイ方式
-  // （openOverlayPanel）へ移植済みのため、この関数の先頭にあるoverlayPanelOpenIdチェックで
-  // 既にカバーされている（DOM自体をindex.htmlから削除したため、ここでの参照も削除した）。
-  if (!proAuthModal.classList.contains('hidden')) {
-    proAuthCloseBtn.click();
-    return;
-  }
+  // help/welcome/premium-locked/feedback/pro-authは配信を消さないオーバーレイ方式
+  // （openOverlayPanel、pro-authは2026-08-08移植）へ移植済みのため、この関数の先頭にある
+  // overlayPanelOpenIdチェックで既にカバーされている（DOM自体をindex.htmlから削除したため、
+  // ここでの参照も削除した）。
 }
 
 document.addEventListener('keydown', (e) => {

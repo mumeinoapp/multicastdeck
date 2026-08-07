@@ -505,27 +505,15 @@ button:hover:not(:disabled) {
 
 #help-modal.hidden, #welcome-modal.hidden, #premium-locked-modal.hidden, #pro-auth-modal.hidden, #feedback-modal.hidden { display: none; }
 
-/* pro-auth-modal（会員登録、決済フロー）はまだ旧方式（hideContentViewsForOverlayで
-   メインウィンドウのBrowserViewを一時退避してからDOM内に表示）のままのため、従来通り
-   画面全体を覆う暗転backdropを維持する。 */
-#pro-auth-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1200; /* 何よりも最前面に表示する */
-}
-
-/* help/welcome/premium-locked/feedback: 2026-08-07にcentered化（overlay-panel専用の
-   小さめBrowserViewをmain.js側でカードサイズぶんだけ画面中央に配置する方式）へ変更。
+/* help/welcome/premium-locked/feedback/pro-auth: centered化（overlay-panel専用の
+   小さめBrowserViewをmain.js側でカードサイズぶんだけ画面中央に配置する方式、
+   help/welcome/premium-locked/feedbackは2026-08-07、pro-authは2026-08-08に移行）。
    これらのdivはそのBrowserView（body自体がカード程度のサイズしかない）の中に描画される
-   ため、画面全体を覆うposition:fixed;inset:0や暗転backgroundはもう不要（というよりむしろ
+   ため、画面全体を覆うposition:fixed;inset:0や暗転backgroundは不要（というよりむしろ
    カード外周に無駄な暗い余白ができてしまうため入れない）。中身の.modal-contentをその
    BrowserView内で中央寄せするだけでよい。奥行き感はbox-shadowで表現する（下記の
    html.centered-modal .modal-content参照）。 */
-#help-modal, #welcome-modal, #premium-locked-modal, #feedback-modal {
+#help-modal, #welcome-modal, #premium-locked-modal, #feedback-modal, #pro-auth-modal {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -666,10 +654,10 @@ button:hover:not(:disabled) {
   max-width: 480px;
 }
 
-/* html.centered-modalはoverlay-panel.js側でhelp/welcome/premium-locked/feedbackの
-   4モーダル読み込み時にのみ付与されるクラス（pro-auth-modalや#settings-modal等、他の
-   .modal-content利用箇所には影響しない）。カードの外側が透明になった分、box-shadowで
-   浮遊感・奥行きを出す（floating-dropdownの.floating-dropdown-rootと同じ考え方）。 */
+/* html.centered-modalはoverlay-panel.js側でhelp/welcome/premium-locked/feedback/pro-authの
+   5モーダル読み込み時にのみ付与されるクラス（#settings-modal等、他の.modal-content利用箇所
+   には影響しない）。カードの外側が透明になった分、box-shadowで浮遊感・奥行きを出す
+   （floating-dropdownの.floating-dropdown-rootと同じ考え方）。 */
 html.centered-modal .modal-content {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
 }

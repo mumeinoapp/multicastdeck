@@ -385,8 +385,11 @@ let feedbackDraft = { subject: '', body: '' };
  * 2026-08-07追加: help/welcome/premium-locked/feedbackの4モーダルをこの基盤へ移植した
  * （旧: hideContentViewsForOverlayで全BrowserViewを丸ごと退避する方式。配信を一切消さない
  * 方針への転換に伴う変更）。
- * 会員登録(pro-auth、決済フローを含む)は今回のスコープ外（次回セッションで移植予定。
- * それまでは従来通りhideContentViewsForOverlayを使用する＝この一覧には含めない）。
+ * 2026-08-08追加: 会員登録(pro-auth)もこの基盤へ移植した。決済(Stripe Checkout)自体は
+ * shell.openExternalで外部ブラウザに委譲する既存方式のままで、pro-auth:*のIPCハンドラ・
+ * 決済ロジック（本ファイル内、refreshProAuthStatus/paymentBackendFetch等）は変更していない。
+ * これにより旧方式のhideContentViewsForOverlay/showContentViewsForOverlayを呼ぶ画面は
+ * 無くなったが、関数・IPCハンドラ自体は将来のために残してある。
  *
  * 2026-08-08修正（実機報告3件の根本原因対応）: 当初は「カード自体のサイズだけBrowserView
  * を取り、画面中央に配置する」方式にしていたが、これだとカードの外側（配信タイルが透けて
@@ -402,7 +405,7 @@ let feedbackDraft = { subject: '', body: '' };
  * にしつつ、外側クリックでの「閉じる」判定はoverlayPanelView自身のJS
  * （overlay-panel.js側、背景要素へのclickでoverlayApi.close()）で行う。
  */
-const OVERLAY_PANEL_CENTERED_IDS = new Set(['help', 'welcome', 'premium-locked', 'feedback']);
+const OVERLAY_PANEL_CENTERED_IDS = new Set(['help', 'welcome', 'premium-locked', 'feedback', 'pro-auth']);
 
 function ensureOverlayPanelView() {
   if (overlayPanelView) return overlayPanelView;
