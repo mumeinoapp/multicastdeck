@@ -1222,8 +1222,9 @@ window.api.onDropsAutoError(({ gameName, message }) => {
 
 // ---- Auto Tune-In（フォロー中配信者の自動タイル追加） ----
 // 2026-08-08: 設定UI一式（連携状態の表示・連携/解除ボタン・有効化チェック・上限枠）は
-// 配信チェックパネルごとオーバーレイパネル基盤へ移植した
-// （src/renderer/overlay-panel/overlay-panel.js の mountUnifiedFeed 参照）。
+// 配信一覧ウィンドウごと独立BrowserWindow方式へ完全移行した
+// （src/renderer/stream-check-window/stream-check-window.js 参照。旧overlay-panel.jsの
+// mountUnifiedFeed()は段階Dで撤去済み）。
 // メインウィンドウ側に残るのは、パネル側からは出来ない「TwitchのOAuth連携画面（アプリ内
 // BrowserView）を開いている間のヘッダーロックと『連携画面を閉じる』ボタンの出し入れ」だけ。
 // 開閉のきっかけは main.js が送る auto-tune-in:auth-view-opened / -closed 通知で受け取る。
@@ -1433,21 +1434,15 @@ window.api.onZappingError(({ message }) => {
   zappingStatus.textContent = `エラー: ${message}`;
 });
 
-// ---- プラットフォーム横断の統一フィード（配信チェック、ロードマップ項目6） ----
-// 2026-08-08: パネルの中身（配信中一覧のカード表示・自動追加の対象選択・フォロー配信者の
-// 自動追加設定）は、まるごと汎用オーバーレイパネル基盤へ移植した
-// （src/renderer/overlay-panel/{index.html,overlay-panel.js,overlay-panel.css}）。
-// 旧方式は openSidePanel('unified-feed', 340) で配信タイルの幅を縮めて隙間を空けるサイドパネル
-// だったが、現在は配信タイルを一切縮めない・消さない専用BrowserViewのオーバーレイになっている。
-// メインウィンドウ側に残るのはヘッダーボタンとPro機能ガードのみ。
+// ---- プラットフォーム横断の統一フィード（配信一覧、ロードマップ項目6） ----
+// 2026-08-07、方針転換によりオーバーレイパネル方式から独立BrowserWindow方式へ切替（段階A〜D）。
+// 複窓レイアウト設定と同じ考え方で、押したら「開く（既に開いていればフォーカスするだけ）」の
+// 単純な導線にする。トグルクローズはウィンドウ自身の×ボタン・ESCキーが担当する
+// （createStreamCheckWindow()参照）。旧overlay-panel側のunified-feedコード（オーバーレイパネル
+// 方式）は段階Dで撤去済み。メインウィンドウ側に残るのはヘッダーボタンとPro機能ガードのみ。
 
 const unifiedFeedBtn = document.getElementById('unified-feed-btn');
 
-// 2026-08-07、方針転換によりオーバーレイパネル方式から独立BrowserWindow方式へ切替（段階A）。
-// 複窓レイアウト設定と同じ考え方で、押したら「開く（既に開いていればフォーカスするだけ）」の
-// 単純な導線にする。トグルクローズはウィンドウ自身の×ボタン・ESCキーが担当する
-// （createStreamCheckWindow()参照）。旧overlayPanelOpenId==='unified-feed'の分岐は
-// 段階Dでoverlay-panel側のunified-feedコードを撤去する際にあわせて整理する。
 unifiedFeedBtn.addEventListener('click', async () => {
   if (!premiumUnlocked) { showPremiumLockedModal(); return; }
   await window.api.openStreamCheckWindow();
@@ -2439,8 +2434,8 @@ const SIDE_PANEL_ELEMENTS = {
   emotes: emotesPanel,
   'chat-integration': chatIntegrationPanel,
   'layout-share': layoutSharePanel,
-  // 'unified-feed'（配信チェック）は2026-08-08にオーバーレイパネル基盤へ移植したため、
-  // openSidePanel系のスタック管理対象からは外れている。
+  // 'unified-feed'（配信一覧）は独立BrowserWindow方式（createStreamCheckWindow）へ
+  // 完全移行したため、openSidePanel系のスタック管理対象からは外れている。
   'drops-hub': dropsHubModal,
 };
 
@@ -2472,11 +2467,10 @@ window.api.onOverlayPanelChanged(({ openId }) => {
 // openOverlayPanel→IPC往復→onOverlayPanelChangedの反映は非同期のため、このリスナーが
 // 同期的に評価される時点ではoverlayPanelOpenIdはまだ更新されておらず、開いた直後に
 // 誤って閉じてしまうことはない。
-// 配信チェック等のドッキング型パネルは、旧サイドパネル方式と同じく「閉じるボタン/Escape/
-// ヘッダーボタンの再クリックでのみ閉じる」挙動を維持する（画面右端に常駐させたまま、ヘッダーの
-// 他ボタンを操作できるようにするため）。外側クリックで閉じるのはcentered系モーダルのみ。
-const OVERLAY_PANEL_DOCKED_IDS = new Set(['unified-feed']);
-
+// 2026-08-08（段階D）: 配信チェック（unified-feed）のドッキング型表示は撤去済み。
+// openOverlayPanelSafe()経由で開かれるのはcentered系モーダル（help/welcome/premium-locked/
+// feedback/pro-auth）のみになったため、ドッキング型を外側クリックで閉じない特別扱い
+// （旧OVERLAY_PANEL_DOCKED_IDS）は不要になり撤去した。
 document.addEventListener('click', () => {
   if (suppressNextOutsideClick) {
     // 別のオーバーレイパネルを開くボタン自身のクリックだった場合はここで消費するだけで、
@@ -2485,7 +2479,6 @@ document.addEventListener('click', () => {
     return;
   }
   if (!overlayPanelOpenId) return;
-  if (OVERLAY_PANEL_DOCKED_IDS.has(overlayPanelOpenId)) return;
   window.api.closeOverlayPanel();
 });
 

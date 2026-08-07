@@ -218,12 +218,11 @@
     </div>
   </div>
 
-  <!-- 「📡 配信チェック」(#unified-feed-modal) は 2026-08-08 に汎用オーバーレイパネル基盤へ移植した
-       （src/renderer/overlay-panel/index.html・overlay-panel.js を参照）。旧方式は
-       window.api.openSidePanel('unified-feed', 340) で配信タイルの幅を縮めて隙間を空けるサイドパネル
-       だったが、現在は配信タイルを一切縮めない・消さない専用BrowserViewのオーバーレイになっている。
-       ヘッダーの #unified-feed-btn 自体はこちらに残しており、クリックで openOverlayPanel('unified-feed')
-       を呼ぶだけになっている（renderer.js 参照）。 -->
+  <!-- 「📡 配信一覧」は独立BrowserWindow方式（src/renderer/stream-check-window/配下、
+       main.jsのcreateStreamCheckWindow）へ完全移行済み（段階A〜D）。旧オーバーレイパネル基盤への
+       移植版（src/renderer/overlay-panel/配下のmountUnifiedFeed()等）は段階Dで撤去済み。
+       ヘッダーの #unified-feed-btn 自体はこちらに残しており、クリックで
+       window.api.openStreamCheckWindow() を呼ぶだけになっている（renderer.js 参照）。 -->
   <!-- Dropsハブ（依頼#15で3つの個別ボタンを統合）。Twitch/Kick Dropsページ表示・進捗確認は
        無料機能。Drops自動追加/削除セクションのみ、元々あった配信チェック(Pro)からの移設に伴い
        Pro限定を継続する（renderer.jsのapplyPremiumLockUiStates/premiumUnlockedガード参照）。 -->

@@ -161,6 +161,16 @@
       相互同期する。独立レビューでPASS（IPCチャンネル名整合・XSS対策・旧実装との機能同一性・
       既存段階B機能の非回帰を確認）。実機での動作確認はまだ未実施。
     - 段階D: 旧overlay-panel側のunified-feedコード撤去、分岐整理
+      → **実装・独立レビューPASS済み（2026-08-08セッション）**。overlay-panel.js/index.html/
+      overlay-panel.css/overlay-panel-preload.jsからunified-feed専用コードを削除、main.jsの
+      OVERLAY_PANEL_WIDTHS・renderer.jsのOVERLAY_PANEL_DOCKED_IDS（いずれもunified-feedのみが
+      対象だった）も撤去。overlayPanelView基盤（help/welcome/premium-locked/feedback/pro-auth
+      が使用中）や、main.jsのfetchUnifiedFeed()本体・unified-feed:*のipcMainハンドラ
+      （stream-check-window側が現役使用中）は変更なし。独立レビューでPASS。
+      ⚠️注記: 本セッションも.git/index.lockが解除できず、git commit未実行（ファイル変更自体は
+      ディスクに保存済み）。次セッション冒頭でロック解除・コミットを確認すること。
+      実機での動作確認（help/welcome/premium-locked/feedback/pro-auth各モーダル、配信一覧
+      ボタン）はまだ未実施。
     - 段階E: 実機確認＋要件②③の続行（③のヘルプ移設・「詳しく」導線は段階Cで未着手のため
       残作業として引き継ぐ）
 

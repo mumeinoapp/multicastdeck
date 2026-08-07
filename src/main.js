@@ -386,10 +386,9 @@ let overlayPanelOpenId = null;
 
 const OVERLAY_PANEL_DEFAULT_WIDTH = 360;
 
-// ドッキング型（非centered）オーバーレイパネルのうち、既定幅では狭すぎるものだけを個別に指定する。
-// 'unified-feed'（配信チェック）は2026-08-08にカード表示化し、アバター画像＋2種類のチェックボックス
-// ＋配信者名＋視聴者数＋追加ボタンを1行に収める必要があるため420pxにしている。
-const OVERLAY_PANEL_WIDTHS = { 'unified-feed': 420 };
+// 2026-08-08（段階D）: ドッキング型パネル別の幅指定OVERLAY_PANEL_WIDTHSは撤去済み。唯一の利用元
+// だった'unified-feed'（配信チェック）が独立BrowserWindow方式へ完全移行したため、現在ドッキング型で
+// 開かれるのは幅調整不要な汎用プレースホルダ（overlay-panel-generic）のみで、既定幅で足りる。
 
 // overlayPanelView（オーバーレイパネル用BrowserView）にも中継する必要があるpush通知チャンネル。
 // notifyRenderer()はメインウィンドウにしか送らないため、パネル側UIが購読しているものだけを
@@ -459,7 +458,7 @@ function relayoutOverlayPanel() {
     });
     return;
   }
-  const panelWidth = Math.min(OVERLAY_PANEL_WIDTHS[overlayPanelOpenId] || OVERLAY_PANEL_DEFAULT_WIDTH, width);
+  const panelWidth = Math.min(OVERLAY_PANEL_DEFAULT_WIDTH, width);
   overlayPanelView.setBounds({
     x: width - panelWidth,
     y: HEADER_HEIGHT,
@@ -1394,9 +1393,8 @@ function createLayoutWindow() {
  *   OS全体の最前面固定にはならない）。
  * - 既に開いている場合は多重生成せず、既存ウィンドウをフォーカスするだけ。
  *
- * 段階Bでカード一覧・フィルタ・自動更新を実装済み。「自動追加の対象を選ぶ」「フォロー配信者の
- * 自動追加」は段階C未着手のため、旧overlay-panel側のmountUnifiedFeed()はそれらの受け皿として
- * まだ削除しない（段階Dで撤去予定）。
+ * 段階Bでカード一覧・フィルタ・自動更新、段階Cで「自動追加の対象を選ぶ」「フォロー配信者の
+ * 自動追加」を実装済み。旧overlay-panel側のmountUnifiedFeed()は段階Dで撤去済み。
  */
 function createStreamCheckWindow() {
   if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {

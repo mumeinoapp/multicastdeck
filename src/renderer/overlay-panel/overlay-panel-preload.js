@@ -33,30 +33,7 @@ contextBridge.exposeInMainWorld('overlayApi', {
   logoutProAuth: () => ipcRenderer.invoke('pro-auth:logout'),
   startProCheckout: (method, months) => ipcRenderer.invoke('pro-auth:start-checkout', { method, months }),
 
-  // ---- 配信チェック（unified-feed）移植分（2026-08-08） ----
-  // IPCチャンネル名はsrc/preload.jsの同名メソッドと完全に一致させてある（main.js側のハンドラを
-  // 共用するため、呼び出し口が増えるだけで処理は変えていない）。unified-feed:get/set-platform-filter
-  // だけは、巨大な settings:get-all/set-all を経由せず1項目だけ読み書きするための新設チャンネル。
-  fetchUnifiedFeed: (options) => ipcRenderer.invoke('unified-feed:fetch', options),
-  addChannel: (name, platform) => ipcRenderer.invoke('channels:add', { name, platform: platform || 'twitch' }),
-
-  getAutoTuneInTargets: () => ipcRenderer.invoke('auto-tune-in:get-targets'),
-  setAutoTuneInTargets: (targets) => ipcRenderer.invoke('auto-tune-in:set-targets', targets),
-  fetchAllFollowCandidates: () => ipcRenderer.invoke('auto-tune-in:fetch-all-follow-candidates'),
-
-  getFeedPinnedYoutube: () => ipcRenderer.invoke('feed-pin:get-youtube'),
-  setFeedPinnedYoutube: (list) => ipcRenderer.invoke('feed-pin:set-youtube', list),
-
-  getAutoTuneInStatus: () => ipcRenderer.invoke('auto-tune-in:get-status'),
-  setAutoTuneInConfig: (partial) => ipcRenderer.invoke('auto-tune-in:set-config', partial),
-  startTwitchAuth: () => ipcRenderer.invoke('auto-tune-in:start-auth'),
-  cancelTwitchAuth: () => ipcRenderer.invoke('auto-tune-in:cancel-auth'),
-  disconnectTwitchAuth: () => ipcRenderer.invoke('auto-tune-in:disconnect'),
-  // これら2つのpush通知は、main.jsのnotifyRenderer()がOVERLAY_PANEL_FORWARDED_CHANNELSに
-  // 基づいてこのBrowserViewにも中継している（既定ではメインウィンドウにしか送られないため）。
-  onAutoTuneInError: (cb) => ipcRenderer.on('auto-tune-in:error', (_e, payload) => cb(payload)),
-  onAutoTuneInAuthLost: (cb) => ipcRenderer.on('auto-tune-in:auth-lost', () => cb()),
-
-  getUnifiedFeedPlatformFilter: () => ipcRenderer.invoke('unified-feed:get-platform-filter'),
-  setUnifiedFeedPlatformFilter: (filter) => ipcRenderer.invoke('unified-feed:set-platform-filter', filter),
+  // 2026-08-08（段階D）: 配信チェック（unified-feed）関連APIは撤去済み。当該機能は独立
+  // BrowserWindow方式（src/renderer/stream-check-window/配下、stream-check-window-preload.js）
+  // へ完全移行済み。
 });
