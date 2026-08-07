@@ -13,6 +13,10 @@
 
 const params = new URLSearchParams(window.location.search);
 const panelId = params.get('panel') || '';
+// 段階E追加: 配信一覧ウィンドウ（別BrowserWindow）の「詳しく」導線から、ヘルプの特定タブ・
+// 特定項目まで直接ジャンプするためのクエリ（main.jsのopenOverlayPanel第2引数経由）。
+const initialHelpTab = params.get('helpTab') || '';
+const initialHelpAnchor = params.get('helpAnchor') || '';
 
 const CENTERED_MODAL_IDS = ['help', 'welcome', 'premium-locked', 'feedback', 'pro-auth'];
 
@@ -115,6 +119,23 @@ function mountHelp() {
       helpTabContents.forEach((c) => c.classList.toggle('hidden', c.dataset.helpContent !== tab));
     });
   });
+
+  // 段階E追加: 配信一覧ウィンドウの「詳しく」から開かれた場合（initialHelpTab/Anchor）、
+  // 該当タブへ切り替えたうえで該当項目までスクロールし、一瞬ハイライトして視認しやすくする。
+  if (initialHelpTab) {
+    selectHelpTab(initialHelpTab);
+    if (initialHelpAnchor) {
+      const targetEl = document.getElementById(initialHelpAnchor);
+      if (targetEl) {
+        // タブ切り替え直後はまだレイアウトが確定していない場合があるため、次フレームで実行する。
+        requestAnimationFrame(() => {
+          targetEl.scrollIntoView({ block: 'center' });
+          targetEl.classList.add('help-anchor-highlight');
+          setTimeout(() => targetEl.classList.remove('help-anchor-highlight'), 2000);
+        });
+      }
+    }
+  }
 }
 
 function selectHelpTab(tabName) {

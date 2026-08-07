@@ -53,8 +53,9 @@
       </header>
 
       <!-- フォロー配信者の自動追加（Twitch連携）。旧overlay-panel.jsの縦長ブロックを
-           圧縮し、状態・操作を1行に収めた。詳しい説明はヘルプ側に既存記載があるためここでは
-           繰り返さない（「詳しく」導線は段階C-6で対応予定、現時点は簡潔な注記のみ）。 -->
+           圧縮し、状態・操作を1行に収めた。詳しい説明はヘルプ(Twitchタブ)へ移設済み
+           （段階E、2026-08-08）。「詳しく」ボタンはstream-check-window-preload.jsの
+           openHelpSection経由でメインウィンドウのヘルプをTwitchタブ・該当項目へ直接開く。 -->
       <div class="stream-check-auto-tune-bar" id="stream-check-auto-tune-bar">
         <span class="stream-check-auto-tune-status-dot" id="stream-check-auto-tune-status-dot"></span>
         <span class="stream-check-auto-tune-status" id="stream-check-auto-tune-status"></span>
@@ -68,6 +69,7 @@
           上限
           <input type="number" id="stream-check-auto-tune-max-input" min="1" max="20" value="4" disabled />
         </label>
+        <button type="button" class="stream-check-auto-tune-help-link" id="stream-check-auto-tune-help-btn">詳しく</button>
         <span class="stream-check-auto-tune-message" id="stream-check-auto-tune-message"></span>
       </div>
 

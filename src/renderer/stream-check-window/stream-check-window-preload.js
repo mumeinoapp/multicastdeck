@@ -52,4 +52,8 @@ contextBridge.exposeInMainWorld('streamCheckApi', {
   // （main.js openTwitchAuthView/closeTwitchAuthView参照、ホストがこのウィンドウの時のみ届く）。
   onTwitchAuthViewOpened: (cb) => ipcRenderer.on('auto-tune-in:auth-view-opened', () => cb()),
   onTwitchAuthViewClosed: (cb) => ipcRenderer.on('auto-tune-in:auth-view-closed', () => cb()),
+
+  // 段階E追加: 圧縮バーの「詳しく」導線用。メインウィンドウを前面に出し、ヘルプの指定タブ・
+  // 指定項目まで開く（main.js ui:open-help-section参照）。
+  openHelpSection: (tab, anchor) => ipcRenderer.invoke('ui:open-help-section', tab, anchor),
 });

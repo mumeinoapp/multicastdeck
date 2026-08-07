@@ -475,8 +475,10 @@ function notifyOverlayPanelChanged() {
  * 汎用オーバーレイパネルを開く。panelId は将来複数パネル（配信チェック等）を
  * 同じ基盤に載せ替える際の識別用（第1段階では 'test' 等の仮IDでもよい）。
  * 既存タイルのbounds再計算（relayoutStreamViews等）は一切呼ばない点が openSidePanel との違い。
+ * extraQuery: 段階E追加。ヘルプの特定タブ・特定項目へ直接ジャンプするための
+ * helpTab/helpAnchor等をロードURLのクエリにそのまま追加で乗せる（overlay-panel.js側で読む）。
  */
-function openOverlayPanel(panelId) {
+function openOverlayPanel(panelId, extraQuery) {
   if (!mainWindow) return;
   const view = ensureOverlayPanelView();
   if (!isViewAttached(view)) {
@@ -487,7 +489,7 @@ function openOverlayPanel(panelId) {
     pathname: path.join(__dirname, 'renderer', 'overlay-panel', 'index.html'),
     protocol: 'file:',
     slashes: true,
-    query: { panel: panelId },
+    query: { panel: panelId, ...(extraQuery || {}) },
   });
   view.webContents.loadURL(url).catch(() => {
     /* ignore（同一ページへの再ロード等） */
@@ -5799,6 +5801,20 @@ ipcMain.handle('ui:open-overlay-panel', (_e, panelId) => {
 
 ipcMain.handle('ui:close-overlay-panel', () => {
   closeOverlayPanel();
+  return true;
+});
+
+// 段階E追加: 配信一覧ウィンドウ（別BrowserWindow）の「詳しく」導線から呼ばれる。
+// ヘルプ自体はメインウィンドウ上のoverlayPanelViewでのみ表示できるため、まずメインウィンドウを
+// 前面に出してから、通常のui:open-overlay-panelと同じ経路でhelpパネルを開く
+// （helpTab/helpAnchorはoverlay-panel.js側でクエリから読み取りタブ切替・スクロールに使う）。
+ipcMain.handle('ui:open-help-section', (_e, helpTab, helpAnchor) => {
+  if (!mainWindow) return false;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  if (openPanels.length) closeAllSidePanels();
+  openOverlayPanel('help', { helpTab: helpTab || '', helpAnchor: helpAnchor || '' });
   return true;
 });
 

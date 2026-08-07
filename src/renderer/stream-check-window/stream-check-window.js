@@ -115,6 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const autoTuneDisconnectBtn = document.getElementById('stream-check-auto-tune-disconnect-btn');
   const autoTuneEnabledInput = document.getElementById('stream-check-auto-tune-enabled-input');
   const autoTuneMaxInput = document.getElementById('stream-check-auto-tune-max-input');
+  const autoTuneHelpBtn = document.getElementById('stream-check-auto-tune-help-btn');
 
   const authLockEl = document.getElementById('stream-check-auth-lock');
   const authCancelBtn = document.getElementById('stream-check-auth-cancel-btn');
@@ -627,6 +628,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const v = Math.max(1, Math.min(20, Number(autoTuneMaxInput.value) || 1));
     autoTuneMaxInput.value = v;
     await window.streamCheckApi.setAutoTuneInConfig({ maxTiles: v });
+  });
+
+  // 段階E追加: 「詳しく」でメインウィンドウのヘルプ(Twitchタブ・#help-twitch-autotune項目)を開く。
+  autoTuneHelpBtn.addEventListener('click', () => {
+    window.streamCheckApi.openHelpSection('twitch', 'help-twitch-autotune');
   });
 
   window.streamCheckApi.onAutoTuneInError(({ message }) => {

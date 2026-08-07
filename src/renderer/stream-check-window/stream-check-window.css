@@ -459,6 +459,28 @@ body {
   padding: 2px 4px;
 }
 
+/* 段階E追加: フォロー配信者の自動追加の詳細説明をヘルプへ移設したため、圧縮バーからの
+   導線として設置するリンク風ボタン。ブランドグラデーション(#4f8cff〜#22d3ee)の下線のみで、
+   他のボタン類（.stream-check-auto-tune-btn）と見た目を差別化し「補足情報への導線」だと
+   分かるようにしている。 */
+.stream-check-auto-tune-help-link {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: #7fb2ff;
+  text-decoration: underline;
+  text-decoration-color: rgba(127, 178, 255, 0.5);
+}
+
+.stream-check-auto-tune-help-link:hover {
+  color: #22d3ee;
+  text-decoration-color: #22d3ee;
+}
+
 .stream-check-auto-tune-message {
   color: #ff9f43;
   margin-left: auto;

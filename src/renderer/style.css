@@ -614,6 +614,17 @@ button:hover:not(:disabled) {
 
 .help-tab-content.hidden { display: none; }
 
+/* 段階E追加: 配信一覧ウィンドウの「詳しく」導線からヘルプの特定項目へジャンプした際、
+   その項目を一瞬ハイライトして視認しやすくする（overlay-panel.jsのmountHelp参照）。 */
+.help-anchor-highlight {
+  animation: help-anchor-flash 2s ease-out;
+  border-radius: 4px;
+}
+@keyframes help-anchor-flash {
+  0% { background-color: rgba(79, 140, 255, 0.35); }
+  100% { background-color: transparent; }
+}
+
 .help-tab-content h3 {
   margin-top: 0;
   font-size: 16px;
