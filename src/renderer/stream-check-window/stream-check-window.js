@@ -15,8 +15,29 @@
 // これらの受け皿が無い段階Bでは、ピン留め済みでオフラインのチャンネルは「OFFLINE」表示のカードとして
 // 出すだけに留める（ピン設定自体の変更はできない）。旧overlay-panel側のmountUnifiedFeed()は
 // これらの機能を提供し続けるため、段階Dで撤去するまでそのまま残す。
+//
+// 2026-08-08実機報告を受けた追加修正:
+// - プラットフォーム表示順をTwitch→YouTube→Kick固定に変更（各プラットフォーム内は従来通り
+//   LIVE優先→視聴者数順）。sortUnifiedFeedItems()参照。
+// - 誤って「＋追加」した場合に取り消せるよう、カードに「削除」ボタンを追加（channels:remove再利用）。
 
 const UNIFIED_FEED_AUTO_REFRESH_MS = 20 * 1000;
+
+// 2026-08-08実機報告対応: 「上からTwitch/YouTube/Kickの順を絶対にする」ため、main.js側の
+// fetchUnifiedFeed()（配信中→視聴者数順のみ）とは別に、このウィンドウの表示直前でのみ
+// プラットフォーム優先ソートをかける。layout-window.js等の他の利用箇所には影響させないため、
+// main.js側の共通ソートは変更していない。
+const PLATFORM_SORT_ORDER = { twitch: 0, youtube: 1, kick: 2 };
+
+/** Twitch→YouTube→Kickの順、各プラットフォーム内はLIVE優先→視聴者数の多い順。 */
+function sortUnifiedFeedItems(items) {
+  return [...items].sort((a, b) => {
+    const platformDiff = (PLATFORM_SORT_ORDER[a.platform] ?? 99) - (PLATFORM_SORT_ORDER[b.platform] ?? 99);
+    if (platformDiff !== 0) return platformDiff;
+    if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
+    return (b.viewerCount || 0) - (a.viewerCount || 0);
+  });
+}
 
 // アバター画像が無い／読み込み失敗した時のフォールバック（overlay-panel.js / layout-window.js と同じ図柄）。
 // CSPの都合でHTML属性の onerror= は使えないため、JS側でハンドラを付けて差し替える。
@@ -168,11 +189,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     card.appendChild(main);
 
+    const actions = document.createElement('div');
+    actions.className = 'stream-check-card-actions';
+
     const addBtn = document.createElement('button');
     addBtn.type = 'button';
     addBtn.className = 'stream-check-card-add-btn';
     addBtn.disabled = item.alreadyAdded || offline;
     addBtn.textContent = item.alreadyAdded ? '表示中' : offline ? 'オフライン' : '＋追加';
+
+    // 2026-08-08実機報告対応: 「間違えて追加しても取り消せるように」＋追加ボタンの下に削除
+    // ボタンを追加。まだ追加していないチャンネルでは押せない（disabled）。
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'stream-check-card-remove-btn';
+    removeBtn.textContent = '削除';
+    removeBtn.disabled = !item.alreadyAdded;
+
     addBtn.addEventListener('click', async () => {
       if (offline || item.alreadyAdded) return;
       addBtn.disabled = true;
@@ -185,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         item.alreadyAdded = true;
         addBtn.textContent = '表示中';
+        removeBtn.disabled = false;
         // メインウィンドウ側のチップ一覧はmain.jsのchannels:add→'channels:changed'通知を受けて
         // 自動的に更新されるため、ここから追加の通知は不要。
       } catch (err) {
@@ -192,14 +226,35 @@ document.addEventListener('DOMContentLoaded', () => {
         addBtn.disabled = false;
       }
     });
-    card.appendChild(addBtn);
+
+    removeBtn.addEventListener('click', async () => {
+      if (!item.alreadyAdded) return;
+      removeBtn.disabled = true;
+      try {
+        await window.streamCheckApi.removeChannel(item.channel);
+        item.alreadyAdded = false;
+        addBtn.disabled = offline;
+        addBtn.textContent = offline ? 'オフライン' : '＋追加';
+        // メインウィンドウ側のタイル・チップは既存のchannels:remove IPCハンドラ（main.js
+        // removeChannel()内のnotifyRenderer('tile:bar-remove')等、既存のチップ削除ボタンと
+        // 全く同じ経路）で除去される。このウィンドウ側から追加の通知は不要。
+      } catch (err) {
+        setStatus(`削除に失敗しました: ${String((err && err.message) || err)}`, true);
+      } finally {
+        removeBtn.disabled = !item.alreadyAdded;
+      }
+    });
+
+    actions.appendChild(addBtn);
+    actions.appendChild(removeBtn);
+    card.appendChild(actions);
 
     return card;
   }
 
   function render() {
-    const filtered = unifiedFeedItems.filter(
-      (item) => platformFilter === 'all' || item.platform === platformFilter
+    const filtered = sortUnifiedFeedItems(
+      unifiedFeedItems.filter((item) => platformFilter === 'all' || item.platform === platformFilter)
     );
     grid.textContent = '';
     if (!filtered.length) {

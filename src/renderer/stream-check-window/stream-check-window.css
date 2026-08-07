@@ -6,6 +6,13 @@
  * カードグリッド部分（.stream-check-card*）はlayout-window.cssの.layout-card*をベースに、
  * 選択状態（is-selected/slot-badge、あちらは複窓レイアウト設定専用機能）を除いたもの。
  * メインウィンドウの ../style.css は読み込まない（独立ウィンドウのため）。
+ *
+ * 2026-08-08実機報告を受けた追加修正:
+ * - main.js側でframe:falseに変更したため、.stream-check-window-headerが唯一のタイトルバー
+ *   表示になった。ドラッグ移動を代替するため-webkit-app-region:dragを付与し、クリック可能な
+ *   ボタン類にはno-dragを個別に付与している。
+ * - カードの縁を公式サイト(mumeinoapp.pages.dev)風のネオン系グラデーション枠に変更
+ *   （「暗すぎる」実機報告への対応）。
  */
 * {
   box-sizing: border-box;
@@ -29,7 +36,9 @@ body {
   height: 100%;
 }
 
-/* ---- ヘッダー ---- */
+/* ---- ヘッダー ----
+ * frame:falseにより唯一のタイトルバー表示となったため、-webkit-app-region:dragで
+ * ウィンドウ全体のドラッグ移動を担う。中の×ボタンだけno-dragでクリック可能にする。 */
 .stream-check-window-header {
   display: flex;
   align-items: center;
@@ -39,6 +48,7 @@ body {
   background: #1f1f23;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
+  -webkit-app-region: drag;
 }
 
 .stream-check-window-title {
@@ -54,6 +64,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  -webkit-app-region: no-drag;
 }
 
 .stream-check-window-close {
@@ -93,7 +104,7 @@ body {
   cursor: default;
 }
 
-/* ---- ツールバー（プラットフォーム絞り込み・最終更新時刻） ---- */
+/* ---- ツールバー（プラットフォーム絞り込み・更新ボタン・最終更新時刻・ステータス） ---- */
 .stream-check-window-toolbar {
   display: flex;
   align-items: center;
@@ -132,19 +143,32 @@ body {
   font-weight: 700;
 }
 
-.stream-check-window-updated-at {
+/* 更新ボタン・最終更新時刻・読み込み中/エラー表示をまとめて右寄せする器。
+   旧実装ではヘッダーに更新ボタン、本文上部に全幅のステータス行があったが、実機報告を受けて
+   ここへ統合し、目立ちすぎない位置に変更した。 */
+.stream-check-window-toolbar-right {
   margin-left: auto;
-  font-size: 11px;
-  color: #a1a1aa;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-/* ---- ステータス行（読み込み中・エラー・件数） ---- */
-.stream-check-window-status {
-  flex-shrink: 0;
-  font-size: 12px;
+.stream-check-window-updated-at {
+  font-size: 11px;
   color: #a1a1aa;
-  padding: 8px 16px 0;
-  min-height: 0;
+  white-space: nowrap;
+}
+
+/* ---- ステータス（読み込み中・エラー・件数） ----
+ * 2026-08-08実機報告を受け、本文上部の全幅行からツールバー右側（最終更新の隣）へ移動し、
+ * 目立ちすぎない小さな表示に変更した。 */
+.stream-check-window-status {
+  font-size: 11px;
+  color: #a1a1aa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
 }
 
 .stream-check-window-status:empty {
@@ -175,6 +199,10 @@ body {
   text-align: center;
 }
 
+/* ネオン系の縁取り（公式サイト風のブルー〜シアングラデーション）。
+   単色borderではグラデーションが描けないため、二重background（内側=カード背景/
+   外側=グラデーション）をpadding-box/border-boxで塗り分ける定番手法を使う。
+   + 淡いグロー(box-shadow)を添えて「暗すぎる」実機報告に対応。 */
 .stream-check-card {
   position: relative;
   display: flex;
@@ -182,14 +210,20 @@ body {
   gap: 10px;
   padding: 12px;
   border-radius: 12px;
-  background: #26262e;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#26262e, #26262e) padding-box,
+    linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%) border-box;
+  box-shadow:
+    0 0 0 1px rgba(34, 211, 238, 0.12),
+    0 0 14px rgba(79, 140, 255, 0.22),
+    0 2px 8px rgba(0, 0, 0, 0.35);
   min-width: 0;
 }
 
 .stream-check-card.offline {
-  opacity: 0.6;
+  opacity: 0.55;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 .stream-check-card-avatar {
@@ -297,9 +331,19 @@ body {
   font-weight: 700;
 }
 
-/* ---- ＋追加ボタン ---- */
-.stream-check-card-add-btn {
+/* ---- ＋追加／削除ボタン（縦積み） ----
+ * 削除ボタンは「間違えて追加しても取り消せるように」実機報告を受けて追加。＋追加ボタンの
+ * 直下に配置し、まだ追加していないチャンネルでは操作不能（disabled）にする。 */
+.stream-check-card-actions {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+.stream-check-card-add-btn,
+.stream-check-card-remove-btn {
   appearance: none;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #26262e;
@@ -308,14 +352,24 @@ body {
   padding: 4px 10px;
   border-radius: 6px;
   cursor: pointer;
-  align-self: flex-start;
 }
 
-.stream-check-card-add-btn:hover:not(:disabled) {
+.stream-check-card-add-btn:hover:not(:disabled),
+.stream-check-card-remove-btn:hover:not(:disabled) {
   background: #2f2f39;
 }
 
-.stream-check-card-add-btn:disabled {
+.stream-check-card-add-btn:disabled,
+.stream-check-card-remove-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.stream-check-card-remove-btn {
+  color: #ff9f9f;
+  border-color: rgba(255, 100, 100, 0.25);
+}
+
+.stream-check-card-remove-btn:hover:not(:disabled) {
+  background: rgba(255, 100, 100, 0.12);
 }

@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('streamCheckApi', {
   // カードの「＋追加」ボタン用。既存の手動チャンネル追加と全く同じIPC・同じ挙動を再利用する。
   addChannel: (payload) => ipcRenderer.invoke('channels:add', payload),
 
+  // カードの「削除」ボタン用（2026-08-08追加、実機報告対応）。既存のチップ×ボタンと全く同じ
+  // channels:remove IPCを再利用する。
+  removeChannel: (channelName) => ipcRenderer.invoke('channels:remove', channelName),
+
   // プラットフォーム絞り込み（すべて/Twitch/YouTube/Kick）の永続化。
   // overlay-panel.js側の同名機能(#8対応)と同じstoreキーを共用する。
   getUnifiedFeedPlatformFilter: () => ipcRenderer.invoke('unified-feed:get-platform-filter'),

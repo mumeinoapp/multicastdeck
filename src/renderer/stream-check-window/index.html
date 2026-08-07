@@ -7,8 +7,10 @@
   経緯: 「配信チェック」（フォロー中/登録中の配信中一覧、旧unified-feed）は当初オーバーレイ
   パネル方式（src/renderer/overlay-panel/）で段階1・2まで実装していたが、ユーザーとの
   再確認の結果、「複窓レイアウト設定」（src/renderer/layout-window/）と同じ独立BrowserWindow
-  方式（alwaysOnTop・ドラッグ可・外側クリックで閉じない・×/ESCのみ閉じる）に統一することが
-  確定した。詳細はMCD大規模アプデ_元依頼一覧.md 項目16参照。
+  方式（ドラッグ可・外側クリックで閉じない・×/ESCのみ閉じる）に統一することが確定した。
+  ただし最前面挙動（alwaysOnTop→parent指定）とframe有無は2026-08-08の実機報告を受けて
+  layout-windowから差分を付けている（詳細は下部の追記コメント、main.js側コメント参照）。
+  詳細はMCD大規模アプデ_元依頼一覧.md 項目16参照。
 
   段階Bのスコープ: カード一覧（アバター・名前・LIVE・タイトル・カテゴリ・視聴者数・配信時間）・
   プラットフォーム絞り込み・自動更新の表示ロジックを、overlay-panel.js(mountUnifiedFeed)の
@@ -16,6 +18,11 @@
   経過時間表示ロジックを組み合わせて移植したもの。「自動追加の対象を選ぶ」「フォロー配信者の
   自動追加」は段階C（専用タブ化）まで未着手のため、旧overlay-panel側のmountUnifiedFeed()は
   それらの受け皿としてまだ残している（段階Dで撤去予定）。
+
+  2026-08-08実機報告を受けた追加修正: ヘッダー重複解消のためframe:falseに変更（main.js側）した
+  ため、このHTML内の自作ヘッダーが唯一のタイトルバー表示になった（-webkit-app-region:dragで
+  ドラッグ移動を担う、CSS側参照）。更新ボタンはヘッダーからツールバー（最終更新の左）へ移設、
+  読み込み中/エラー表示もツールバー内に統合して独立の全幅行を廃止した。
 -->
 <html lang="ja">
   <head>
@@ -35,7 +42,6 @@
       <header class="stream-check-window-header">
         <span class="stream-check-window-title">配信一覧</span>
         <div class="stream-check-window-header-actions">
-          <button type="button" class="stream-check-window-refresh" id="stream-check-refresh-btn">🔄 更新</button>
           <button type="button" class="stream-check-window-close" id="stream-check-close-btn" aria-label="閉じる">×</button>
         </div>
       </header>
@@ -47,10 +53,12 @@
           <button class="stream-check-window-filter-btn" data-platform="youtube">YouTube</button>
           <button class="stream-check-window-filter-btn" data-platform="kick">Kick</button>
         </div>
-        <span class="stream-check-window-updated-at" id="stream-check-updated-at"></span>
+        <div class="stream-check-window-toolbar-right">
+          <span class="stream-check-window-status" id="stream-check-status" role="status"></span>
+          <button type="button" class="stream-check-window-refresh" id="stream-check-refresh-btn">🔄 更新</button>
+          <span class="stream-check-window-updated-at" id="stream-check-updated-at"></span>
+        </div>
       </div>
-
-      <div class="stream-check-window-status" id="stream-check-status" role="status"></div>
 
       <main class="stream-check-window-body">
         <div class="stream-check-card-grid" id="stream-check-card-grid"></div>

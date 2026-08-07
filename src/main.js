@@ -1379,20 +1379,27 @@ function createLayoutWindow() {
  * ユーザーとの再確認の結果、「複窓レイアウト設定」（createLayoutWindow()）と同じ独立
  * BrowserWindow方式に統一することが確定した。詳細はMCD大規模アプデ_元依頼一覧.md 項目16参照。
  *
- * createLayoutWindow()と全く同じ設計方針を踏襲する:
- * - parent は指定しない（完全に独立したウィンドウ）。
- * - alwaysOnTop: true。frame: true（タイトルバーのドラッグ移動・OS標準の閉じるボタンに任せる）。
- * - ウィンドウ外クリックでは閉じない。閉じられるのは「HTML側の×ボタン」「ESCキー」
- *   「OSの閉じるボタン」の3つだけ。
+ * createLayoutWindow()と同じくウィンドウ外クリックでは閉じない（閉じられるのは「HTML側の×
+ * ボタン」「ESCキー」「OSの閉じるボタン」の3つだけ）が、以下2点は2026-08-08の実機報告を受けて
+ * createLayoutWindow()から意図的に差分を付けている:
+ * - frame: false（＋自前のドラッグ可能ヘッダー）。旧frame:trueでは「OSネイティブのタイトルバー
+ *   （灰色の『配信一覧』文字・最小化/最大化/閉じるボタン）」と「HTML側の自作ヘッダー（同じ
+ *   『配信一覧』文字・×ボタン）」が二重に表示される実機報告があったため、frameを廃止して
+ *   自作ヘッダー側（ブランドグラデーションで着色済み）だけを唯一の表示にした。最小化ボタンは
+ *   ユーザー了承の上そのまま消える。ドラッグ移動はCSS側の-webkit-app-region:dragで自作ヘッダーに
+ *   持たせている（stream-check-window.css参照）。
+ * - alwaysOnTopではなくparent: mainWindowを指定。alwaysOnTop:trueはOS全体の最前面（他アプリの
+ *   ウィンドウより前）に出てしまう実機報告があったため、「MCDのメインウィンドウより前」に
+ *   留める目的でparent指定に変更した（Electronの子ウィンドウは親より常に前面に出るが、
+ *   OS全体の最前面固定にはならない）。
  * - 既に開いている場合は多重生成せず、既存ウィンドウをフォーカスするだけ。
  *
- * 段階Aでは中身はプレースホルダーのみで、旧overlay-panel側のmountUnifiedFeed()（配信中一覧の
- * 取得・表示・自動追加設定ロジック一式）はまだ削除しない（段階Dで撤去予定）。ヘッダーボタンの
- * 導線だけをこちらへ向け、実際の表示ロジック移植は段階B以降で行う。
+ * 段階Bでカード一覧・フィルタ・自動更新を実装済み。「自動追加の対象を選ぶ」「フォロー配信者の
+ * 自動追加」は段階C未着手のため、旧overlay-panel側のmountUnifiedFeed()はそれらの受け皿として
+ * まだ削除しない（段階Dで撤去予定）。
  */
 function createStreamCheckWindow() {
   if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {
-    if (streamCheckWindow.isMinimized()) streamCheckWindow.restore();
     streamCheckWindow.focus();
     return streamCheckWindow;
   }
@@ -1403,9 +1410,9 @@ function createStreamCheckWindow() {
     minWidth: 480,
     minHeight: 360,
     title: '配信一覧',
-    alwaysOnTop: true,
+    parent: mainWindow,
     show: false,
-    frame: true,
+    frame: false,
     backgroundColor: '#1a1a1e',
     webPreferences: {
       preload: path.join(__dirname, 'renderer', 'stream-check-window', 'stream-check-window-preload.js'),
