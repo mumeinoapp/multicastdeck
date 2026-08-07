@@ -3371,6 +3371,11 @@ async function fetchUnifiedFeed(options = {}) {
               isTarget: false,
               isPinned: false,
               isLive: true,
+              // 2026-08-08段階B追加（配信一覧カード表示用）。normalizeKickFollowedChannel()側で
+              // 既に取得済みの値をそのまま渡すだけ（追加リクエストなし）。
+              title: s.title || '',
+              category: s.category || '',
+              startedAt: s.startedAt || null,
             });
           });
       } catch (err) {
@@ -4321,7 +4326,27 @@ function normalizeKickFollowedChannel(raw) {
   } catch (_) {
     avatarUrl = null; // 装飾要素なので、どんな形のレスポンスが来ても絶対にthrowさせない
   }
-  return { channel: String(slug), displayName: String(displayName), isLive, viewerCount, avatarUrl };
+  // タイトル・カテゴリ・配信時間（配信一覧のカード表示用、2026-08-08段階B追加）。
+  // fetchKickStreamMeta()（個別チャンネルAPI、L3517〜）が使っているのと同じフィールド名
+  // （livestream.session_title / livestream.categories[0].name / livestream.created_at）を、
+  // ここで既に取得済みの livestream から読むだけ（追加のリクエストは発生しない）。
+  // アバターと同様、Kickのレスポンス形式は非公開のため値が取れないこともある前提で、
+  // 表示側（stream-check-window.js）は値が無い項目を単に出さない設計にしてある。
+  let title = '';
+  let category = '';
+  let startedAt = null;
+  try {
+    if (livestream) {
+      title = livestream.session_title || '';
+      category = (livestream.categories && livestream.categories[0] && livestream.categories[0].name) || '';
+      startedAt = livestream.created_at || null;
+    }
+  } catch (_) {
+    title = '';
+    category = '';
+    startedAt = null;
+  }
+  return { channel: String(slug), displayName: String(displayName), isLive, viewerCount, avatarUrl, title, category, startedAt };
 }
 
 // ---- Kickアカウント連携（OAuth 2.1 + PKCE、視聴とは独立した「連携状態の確認」専用） ----

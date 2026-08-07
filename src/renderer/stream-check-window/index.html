@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <!--
-  配信チェックウィンドウ（2026-08-07、方針転換により新設・段階A）のHTML。
-  main.jsのcreateStreamCheckWindow()がloadFileで読み込む、独立したBrowserWindowの中身。
+  配信チェックウィンドウ（2026-08-07、方針転換により新設・段階A、2026-08-08段階Bでカード一覧・
+  フィルタ・自動更新を実装）のHTML。main.jsのcreateStreamCheckWindow()がloadFileで読み込む、
+  独立したBrowserWindowの中身。
 
   経緯: 「配信チェック」（フォロー中/登録中の配信中一覧、旧unified-feed）は当初オーバーレイ
   パネル方式（src/renderer/overlay-panel/）で段階1・2まで実装していたが、ユーザーとの
@@ -9,16 +10,19 @@
   方式（alwaysOnTop・ドラッグ可・外側クリックで閉じない・×/ESCのみ閉じる）に統一することが
   確定した。詳細はMCD大規模アプデ_元依頼一覧.md 項目16参照。
 
-  段階Aでは独立ウィンドウの土台のみ新設し、中身は準備中のダミー表示。実際のカード一覧・
-  自動追加設定などのロジック移植は段階B以降で行う（旧overlay-panel側のmountUnifiedFeed()は
-  段階Dで撤去するまでこのまま残す）。
+  段階Bのスコープ: カード一覧（アバター・名前・LIVE・タイトル・カテゴリ・視聴者数・配信時間）・
+  プラットフォーム絞り込み・自動更新の表示ロジックを、overlay-panel.js(mountUnifiedFeed)の
+  カード/フィルタ/自動更新ロジックと、layout-window.js(buildCard)のタイトル・カテゴリ・
+  経過時間表示ロジックを組み合わせて移植したもの。「自動追加の対象を選ぶ」「フォロー配信者の
+  自動追加」は段階C（専用タブ化）まで未着手のため、旧overlay-panel側のmountUnifiedFeed()は
+  それらの受け皿としてまだ残している（段階Dで撤去予定）。
 -->
 <html lang="ja">
   <head>
     <meta charset="UTF-8" />
-    <!-- img-src: 将来(段階B)でTwitch/YouTube/Kickのプロフィール画像（httpsリモートURL）と
+    <!-- img-src: Twitch/YouTube/Kickのプロフィール画像（httpsリモートURL）と
          フォールバック用インラインSVG（data:）を表示するため、layout-window/index.htmlと
-         同じCSPをあらかじめ設定しておく。 -->
+         同じCSPを設定している。 -->
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:;"
@@ -31,14 +35,25 @@
       <header class="stream-check-window-header">
         <span class="stream-check-window-title">配信一覧</span>
         <div class="stream-check-window-header-actions">
+          <button type="button" class="stream-check-window-refresh" id="stream-check-refresh-btn">🔄 更新</button>
           <button type="button" class="stream-check-window-close" id="stream-check-close-btn" aria-label="閉じる">×</button>
         </div>
       </header>
 
-      <main class="stream-check-window-body">
-        <div class="stream-check-window-placeholder" id="stream-check-placeholder">
-          準備中です（段階Bで配信中一覧の表示を実装予定）
+      <div class="stream-check-window-toolbar">
+        <div class="stream-check-window-filter-group" id="stream-check-filter-group">
+          <button class="stream-check-window-filter-btn active" data-platform="all">すべて</button>
+          <button class="stream-check-window-filter-btn" data-platform="twitch">Twitch</button>
+          <button class="stream-check-window-filter-btn" data-platform="youtube">YouTube</button>
+          <button class="stream-check-window-filter-btn" data-platform="kick">Kick</button>
         </div>
+        <span class="stream-check-window-updated-at" id="stream-check-updated-at"></span>
+      </div>
+
+      <div class="stream-check-window-status" id="stream-check-status" role="status"></div>
+
+      <main class="stream-check-window-body">
+        <div class="stream-check-card-grid" id="stream-check-card-grid"></div>
       </main>
     </div>
 

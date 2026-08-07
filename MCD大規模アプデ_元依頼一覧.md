@@ -122,13 +122,29 @@
     現役のため、基盤コード自体の無駄ではない）。残りの段階3(要件②専用タブ)/段階4(要件③圧縮設定)は
     独立ウィンドウ前提で以下の段階A〜Eに再分割して進行する:
     - 段階A: 独立ウィンドウの土台のみ新設（中身はプレースホルダー）
-      → **実装・独立レビューPASS済み（2026-08-07セッション、git commit 181f819）**。
+      → **実装・独立レビューPASS済み（2026-08-07セッション、git commit 181f819）。実機確認済み**
+      （2026-08-08、ユーザーがスクリーンショットで確認：ウィンドウが開き「準備中です」表示が
+      正しく出ることを確認）。
       src/renderer/stream-check-window/配下新規4ファイル、src/main.jsのcreateStreamCheckWindow()等、
       src/preload.jsのopenStreamCheckWindow、renderer.jsのunifiedFeedBtnハンドラ差し替え。
-      旧overlay-panel側のmountUnifiedFeed()はまだ削除していない（段階Dで撤去予定）。実機動作
-      確認はまだ未実施。同コミットで表示名「配信チェック」も「配信一覧」へ変更済み（ボタン・
-      見出し・ウィンドウタイトル・README、内部識別子とコメントは意図的に未変更）。
+      旧overlay-panel側のmountUnifiedFeed()はまだ削除していない（段階Dで撤去予定）。同コミットで
+      表示名「配信チェック」も「配信一覧」へ変更済み（ボタン・見出し・ウィンドウタイトル・
+      README、内部識別子とコメントは意図的に未変更）。
     - 段階B: カード一覧・フィルタ・自動更新の表示ロジック移植
+      → **実装・独立レビューPASS済み（2026-08-08セッション）**。overlay-panel.jsのmountUnifiedFeed()
+      （プラットフォーム絞り込みボタン・20秒自動更新タイマー・＋追加ボタン）とlayout-window.jsの
+      buildCard()（アバター・タイトル・カテゴリ・視聴者数・経過時間のカード表示、textContentベースの
+      XSS対策）を組み合わせて、src/renderer/stream-check-window/配下の4ファイルへ実装。
+      main.jsのnormalizeKickFollowedChannel()にtitle/category/startedAtを追加（Kickの
+      livestreamオブジェクトから読むだけで新規リクエストなし）。「自動追加の対象にする」
+      「常に表示（ピン留め）」チェックボックスと「自動追加の対象を選ぶ」「フォロー配信者の
+      自動追加」セクションは意図的にスコープ外（段階Cで対応）、ピン留め済みでオフラインの
+      チャンネルはOFFLINE表示のカードとして出すのみ（設定変更は不可）。独立レビューでPASS
+      （main.js⇔JS間のプロパティ名・IPCチャンネル名・preload API名の整合性、XSS対策、
+      タイマーのクリーンアップ等を確認）。実機での見た目・動作確認はまだ未実施。
+      ⚠️注記: リポジトリの.git/index.lockが本セッション中ずっと解除できず、git commitが
+      実行できていない（ファイル変更自体はディスクに保存済み）。次セッション冒頭でロック解除・
+      コミットを確認すること。
     - 段階C: 自動追加対象選択・フォロー自動追加設定（Twitch連携）の移植
     - 段階D: 旧overlay-panel側のunified-feedコード撤去、分岐整理
     - 段階E: 実機確認＋要件②③の続行
