@@ -665,9 +665,17 @@ function setupChannelNameHistoryDropdown(inputEl, historyKey) {
         closeDropdown();
         inputEl.focus();
       } else if (evt.type === 'remove') {
+        // ×ボタンはfloating-dropdown側（別BrowserView）でmousedownされるため、OSレベルの
+        // フォーカスがそちらへ移りinputElのblurが同期的に発火し、closeDropdown()により
+        // floatOpen が既にfalseになっている場合がある（select時と同じ理由）。ここで
+        // if(floatOpen)のまま再描画をスキップすると「×を押すたびにドロップダウンが閉じる」
+        // 挙動になり煩わしいため、まだ絞り込み結果が残っているならfloatOpenの値に関わらず
+        // 必ずrender()して開き直す（render()自体がmatches空なら閉じる判定を持っている）。
+        // 続けて削除操作を行えるよう、入力欄へフォーカスも戻す。
         await window.api.removeInputHistory(historyKey, evt.value);
         await loadHistory();
-        if (floatOpen) render();
+        render();
+        inputEl.focus();
       }
     },
   };

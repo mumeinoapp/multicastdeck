@@ -75,6 +75,22 @@ function hideEl(el) {
   el.classList.add('hidden');
 }
 
+// 2026-08-08修正（実機報告）: カード内（.modal-content）でmousedownして選択操作等で
+// カード外（背景の透明部分）までドラッグし、そこでmouseupすると、clickイベントの
+// target判定はmouseup位置基準になるためe.target===modal（背景）になり、カード内で
+// 操作を始めたつもりでもモーダルが閉じてしまっていた。mousedownの開始位置も記録し、
+// 「mousedownとclickの両方が背景要素そのものだった」場合に限って閉じるようにする。
+function bindBackdropClose(modal, onClose) {
+  let downOnBackdrop = false;
+  modal.addEventListener('mousedown', (e) => {
+    downOnBackdrop = e.target === modal;
+  });
+  modal.addEventListener('click', (e) => {
+    if (downOnBackdrop && e.target === modal) onClose();
+    downOnBackdrop = false;
+  });
+}
+
 function mountHelp() {
   const helpModal = document.getElementById('help-modal');
   const helpCloseBtn = document.getElementById('help-close-btn');
@@ -88,12 +104,10 @@ function mountHelp() {
 
   helpCloseBtn.addEventListener('click', () => window.overlayApi.close());
   // 2026-08-08追加: overlayPanelViewがコンテンツ領域全体まで広がったことに伴い、カード外側
-  // （#help-modal自身＝透明な背景部分）のクリックで閉じられるようにする。e.target===helpModal
-  // の時だけ発火させることで、カード内（.modal-content内の要素）へのクリックはバブリングして
-  // きても誤って閉じないようにしている。
-  helpModal.addEventListener('click', (e) => {
-    if (e.target === helpModal) window.overlayApi.close();
-  });
+  // （#help-modal自身＝透明な背景部分）のクリックで閉じられるようにする。bindBackdropClose
+  // はmousedown/click双方が背景要素そのものだった場合のみ発火するため、カード内で操作を
+  // 始めて外までドラッグしてしまった場合には誤って閉じない（2026-08-08 実機報告で修正）。
+  bindBackdropClose(helpModal, () => window.overlayApi.close());
   helpTabBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.helpTab;
@@ -123,11 +137,9 @@ function mountWelcome() {
   activeEscapeClose = closeWelcome;
 
   welcomeCloseBtn.addEventListener('click', closeWelcome);
-  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由）。setFirstLaunchDone
-  // の副作用も揃えるため、closeBtnと同じcloseWelcome()を使う。
-  welcomeModal.addEventListener('click', (e) => {
-    if (e.target === welcomeModal) closeWelcome();
-  });
+  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由。bindBackdropClose参照）。
+  // setFirstLaunchDoneの副作用も揃えるため、closeBtnと同じcloseWelcome()を使う。
+  bindBackdropClose(welcomeModal, closeWelcome);
   welcomeOpenHelpBtn.addEventListener('click', async () => {
     await window.overlayApi.setFirstLaunchDone();
     hideEl(welcomeModal);
@@ -143,10 +155,8 @@ function mountPremiumLocked() {
   activeEscapeClose = () => window.overlayApi.close();
 
   premiumLockedCloseBtn.addEventListener('click', () => window.overlayApi.close());
-  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由）。
-  premiumLockedModal.addEventListener('click', (e) => {
-    if (e.target === premiumLockedModal) window.overlayApi.close();
-  });
+  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由。bindBackdropClose参照）。
+  bindBackdropClose(premiumLockedModal, () => window.overlayApi.close());
   premiumLockedOpenHelpBtn.addEventListener('click', () => {
     hideEl(premiumLockedModal);
     mountHelp();
@@ -186,11 +196,10 @@ function mountFeedback() {
   feedbackBodyInput.addEventListener('input', saveDraft);
 
   feedbackCloseBtn.addEventListener('click', () => window.overlayApi.close());
-  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由）。下書きは既存の
-  // input時保存（saveDraft）で常に最新が保持されているため、ここで追加の保存処理は不要。
-  feedbackModal.addEventListener('click', (e) => {
-    if (e.target === feedbackModal) window.overlayApi.close();
-  });
+  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由。bindBackdropClose参照）。
+  // 下書きは既存のinput時保存（saveDraft）で常に最新が保持されているため、ここで追加の
+  // 保存処理は不要。
+  bindBackdropClose(feedbackModal, () => window.overlayApi.close());
   feedbackSendBtn.addEventListener('click', async () => {
     const subject = feedbackSubjectInput.value.trim();
     const body = feedbackBodyInput.value.trim();
@@ -270,10 +279,8 @@ function mountProAuth() {
   refreshProAuthPanel();
 
   proAuthCloseBtn.addEventListener('click', () => window.overlayApi.close());
-  // 2026-08-08追加: カード外側クリックで閉じる（help-modal等と同じ理由）。
-  proAuthModal.addEventListener('click', (e) => {
-    if (e.target === proAuthModal) window.overlayApi.close();
-  });
+  // 2026-08-08追加: カード外側クリックで閉じる（help-modal等と同じ理由。bindBackdropClose参照）。
+  bindBackdropClose(proAuthModal, () => window.overlayApi.close());
 
   proAuthRequestCodeBtn.addEventListener('click', async () => {
     setProAuthMessage('');
