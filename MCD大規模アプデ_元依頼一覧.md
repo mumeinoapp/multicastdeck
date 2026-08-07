@@ -122,10 +122,12 @@
     現役のため、基盤コード自体の無駄ではない）。残りの段階3(要件②専用タブ)/段階4(要件③圧縮設定)は
     独立ウィンドウ前提で以下の段階A〜Eに再分割して進行する:
     - 段階A: 独立ウィンドウの土台のみ新設（中身はプレースホルダー）
-      → **実装・独立レビューPASS済み（2026-08-07セッション）**。src/renderer/stream-check-window/
-      配下新規4ファイル、src/main.jsのcreateStreamCheckWindow()等、src/preload.jsの
-      openStreamCheckWindow、renderer.jsのunifiedFeedBtnハンドラ差し替え。旧overlay-panel側の
-      mountUnifiedFeed()はまだ削除していない（段階Dで撤去予定）。実機動作確認はまだ未実施。
+      → **実装・独立レビューPASS済み（2026-08-07セッション、git commit 181f819）**。
+      src/renderer/stream-check-window/配下新規4ファイル、src/main.jsのcreateStreamCheckWindow()等、
+      src/preload.jsのopenStreamCheckWindow、renderer.jsのunifiedFeedBtnハンドラ差し替え。
+      旧overlay-panel側のmountUnifiedFeed()はまだ削除していない（段階Dで撤去予定）。実機動作
+      確認はまだ未実施。同コミットで表示名「配信チェック」も「配信一覧」へ変更済み（ボタン・
+      見出し・ウィンドウタイトル・README、内部識別子とコメントは意図的に未変更）。
     - 段階B: カード一覧・フィルタ・自動更新の表示ロジック移植
     - 段階C: 自動追加対象選択・フォロー自動追加設定（Twitch連携）の移植
     - 段階D: 旧overlay-panel側のunified-feedコード撤去、分岐整理
@@ -198,15 +200,19 @@
     ON/OFF、Twitchのみ意味を持つ）。未選択タイルを閉じる完全入れ替え自体は元の確認事項⑦通り
     確認ポップアップなしで実行してよいとユーザー確認済み。
 
-    → **段階3実装済み（レビュー前）**: main.jsに`computeTemplateRects(count)`（1〜9枚テンプレート、
-    10枚超は既存computeAutoGridRectsへフォールバック）を新設し、`autoArrangeAllTiles()`
+    → **段階3実装・独立レビューPASS済み（2026-08-07セッション、git commit 7b47444）**:
+    main.jsに`computeTemplateRects(count)`（1〜9枚テンプレート、10枚超は既存
+    computeAutoGridRectsへフォールバック）を新設し、`autoArrangeAllTiles()`
     （既存の自動整列ボタン）の中身をこれに置換。新規`applyLayoutWindowArrange({selection,
     chatVisible})`（既存タイル全閉じ→選択順にaddChannel→チャット一括設定→
     computeTemplateRectsでtileLayouts設定→channelOrder設定→relayoutStreamViews）と
     IPCハンドラ`layout-window:auto-arrange`を追加。layout-window-preload.jsに`addChannel`
     （既存channels:add再利用）・`autoArrange`を追加。layout-window.js/css/index.htmlに
     「自動整列」ボタン・2トグルのUIとロジックを追加、SLOT_LABELSはMAIN/SUB1〜3から1〜9の
-    番号バッジに変更。次は独立レビュー→実機確認。
+    番号バッジに変更。実機での動作確認はまだ未実施。
+    ⚠️注記: 3枚パターンの表記「上1(全幅)+下3分割」は1+3=4枚で本文と矛盾するtypoだったため、
+    実装は`computeTemplateRects`のcase 3で「上1(全幅)+下2分割」（合計3枚、数学的に正しい方）
+    として実装・独立レビュー確認済み。ユーザーへの明示的な再確認はまだ。
 
     ⚠️**2026-08-07セッション追加**: 項目16「配信チェック」も、当初のBrowserViewオーバーレイ方式
     から、この項目20と同じ独立BrowserWindow方式に統一されることが確定した（詳細は項目16参照）。
