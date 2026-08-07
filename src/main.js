@@ -3339,38 +3339,52 @@ async function scrapeYoutubeSubscribedChannels() {
     `);
     const script = `
       (function () {
-        // 2026-08-08修正: 従来は el.querySelector('#avatar img, yt-img-shadow img, img') の
-        // 単純な軽量DOM検索のみだったが、依然として「アイコンが表示されない」報告が続いていた。
-        // 現在のYouTube側マークアップは、アバター画像がLitベースのカスタム要素（例:
-        // yt-avatar-shape等）のshadow DOM内に置かれていることがあり、通常のquerySelectorは
-        // shadow境界を貫通できず見つからない。そのため、shadowRootも辿る深い探索に変更した。
-        function findImgDeep(root) {
+        // 2026-08-08修正: 1回目の修正（querySelector('#avatar img, yt-img-shadow img, img')
+        // || 深い探索、というfallback）でも直らなかった。原因は || の短絡評価: このセレクタ列の
+        // 最後に汎用 'img' を含めているため、たとえそれがアバターと無関係な・srcが空のimg要素
+        // でも「見つかった」扱いになり、本当のアバター画像を探しにshadow DOM側へは絶対に
+        // フォールバックしない状態になっていた（要素が「見つかるか」ではなく「使えるURLが
+        // 取れるか」で判定する必要があった）。
+        // そのため、軽量DOM・shadow DOM問わず候補のimg要素を全て集めて、実際にURLが
+        // 取れたものが見つかるまで順番に試す方式に変更する。
+        function collectImgCandidates(root) {
+          var result = [];
           var stack = [root];
           while (stack.length) {
             var node = stack.pop();
             if (!node) continue;
-            if (node.tagName === 'IMG') return node;
+            if (node.tagName === 'IMG') result.push(node);
             var children = node.children ? Array.prototype.slice.call(node.children) : [];
             for (var i = 0; i < children.length; i++) stack.push(children[i]);
             if (node.shadowRoot) stack.push(node.shadowRoot);
           }
-          return null;
+          return result;
         }
-        function extractAvatarUrl(el) {
-          var avatarEl = el.querySelector('#avatar img, yt-img-shadow img, img') || findImgDeep(el);
-          if (!avatarEl) return null;
-          var src = avatarEl.currentSrc || avatarEl.src || '';
+        function resolveImgSrc(img) {
+          var src = img.currentSrc || img.src || '';
           if (!src || src.indexOf('data:image/gif') === 0 || src.indexOf('data:image/png') === 0) {
-            src = avatarEl.getAttribute('data-src') || '';
+            src = img.getAttribute('data-src') || '';
           }
           if (!src) {
-            var srcset = avatarEl.getAttribute('srcset') || avatarEl.srcset || '';
+            var srcset = img.getAttribute('srcset') || img.srcset || '';
             if (srcset) {
               var first = srcset.split(',')[0].trim().split(' ')[0];
               if (first) src = first;
             }
           }
           return src || null;
+        }
+        function extractAvatarUrl(el) {
+          // #avatar内を優先スコープにして探す（無関係なimg要素を拾う確率を下げるため）。
+          // 何も見つからなければ要素全体まで範囲を広げる。
+          var scope = el.querySelector('#avatar') || el;
+          var candidates = collectImgCandidates(scope);
+          if (!candidates.length && scope !== el) candidates = collectImgCandidates(el);
+          for (var i = 0; i < candidates.length; i++) {
+            var url = resolveImgSrc(candidates[i]);
+            if (url) return url;
+          }
+          return null;
         }
         var items = Array.from(document.querySelectorAll('ytd-channel-renderer'));
         var seen = {};

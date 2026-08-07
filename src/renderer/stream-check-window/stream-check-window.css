@@ -263,11 +263,21 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
-/* 段階C追加: 対象指定・ピン留めチェックボックス（アバターの左に並ぶ）。 */
+/* 段階C追加: 対象指定・ピン留めチェックボックス（アバターの左に並ぶ）。
+   2026-08-08修正: 以前はカードの直接の子として2個とも横並びに置いていたため、YouTubeカード
+   （両方表示）だけ他プラットフォームより横幅を余計に消費し、狭い時にオフライン表記等が被って
+   見える一因になっていた。専用コンテナで縦積みにし、横幅をチェックボックス1個分に抑える。 */
+.stream-check-card-checkbox-col {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
 .stream-check-card-target-checkbox,
 .stream-check-card-pin-checkbox {
   flex-shrink: 0;
-  margin-top: 4px;
   cursor: pointer;
 }
 

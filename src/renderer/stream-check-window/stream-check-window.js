@@ -195,6 +195,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 段階C追加: 「自動追加の対象にする」（Twitch/YouTube専用）「常に表示（ピン留め、YouTube専用）」
     // チェックボックス。段階Bではスコープ外だったが、対象選択タブとの相互同期のためカードにも復活させる。
+    // 2026-08-08修正: 以前はカード直下に2つとも横並びで追加しており、YouTubeカード（両方表示）
+    // が他プラットフォームより横幅を余計に消費し、狭い時にオフライン表記等が被って見える一因に
+    // なっていた。専用の縦積みコンテナ（.stream-check-card-checkbox-col）にまとめ、横幅を
+    // チェックボックス1個分に抑える。
+    const checkboxCol = document.createElement('div');
+    checkboxCol.className = 'stream-check-card-checkbox-col';
     if (item.platform !== 'kick') {
       const targetCheckbox = document.createElement('input');
       targetCheckbox.type = 'checkbox';
@@ -207,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
         await toggleAutoTuneInTarget(item.platform, item.channel, checked);
         syncTargetCheckboxAcrossLists(item.platform, item.channel, checked);
       });
-      card.appendChild(targetCheckbox);
+      checkboxCol.appendChild(targetCheckbox);
     }
     if (item.platform === 'youtube') {
       const pinCheckbox = document.createElement('input');
@@ -222,8 +228,9 @@ document.addEventListener('DOMContentLoaded', () => {
         syncPinCheckboxAcrossLists(item.channel, checked);
         render();
       });
-      card.appendChild(pinCheckbox);
+      checkboxCol.appendChild(pinCheckbox);
     }
+    if (checkboxCol.childElementCount > 0) card.appendChild(checkboxCol);
 
     const avatar = document.createElement('img');
     avatar.className = 'stream-check-card-avatar';
