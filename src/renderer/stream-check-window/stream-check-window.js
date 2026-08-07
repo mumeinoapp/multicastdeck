@@ -264,8 +264,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     main.appendChild(nameRow);
 
-    // タイトル・カテゴリ・経過時間は現状Twitch/Kickのみ値が入る（main.jsのfetchUnifiedFeed参照）。
-    // YouTubeは値を持たないため、単に表示しない。
+    // タイトル・カテゴリはTwitch/Kick/YouTubeいずれも値が入り得る（2026-08-08修正でYouTubeも
+    // 対応、main.jsのfetchUnifiedFeed/fetchYoutubeLiveInfoFree参照）。開始時刻（経過時間表示用）は
+    // Twitch/Kick/YouTubeいずれも取れる場合と取れない場合があるため、無い場合は単に表示しない。
     if (item.title) {
       const title = document.createElement('div');
       title.className = 'stream-check-card-title';

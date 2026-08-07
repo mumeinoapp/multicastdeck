@@ -1525,6 +1525,17 @@ function createStreamCheckWindow() {
     if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {
       store.set('streamCheckWindowBounds', streamCheckWindow.getBounds());
     }
+    // 2026-08-08追加（実機報告の不具合対応）: 配信一覧を開いている間に他アプリをアクティブにし、
+    // MCDへ戻ってから配信一覧を閉じると、直前にアクティブにしていた他アプリが前面に出てしまう
+    // 問題への対応。streamCheckWindowが閉じる際、OS側のフォーカス復帰先を放置すると
+    // （Electron/Windows側の既定動作に委ねると）不定になり、MCDの外に focus が抜けてしまうことがある
+    // ため、閉じる直前に明示的にmainWindowへフォーカスを戻す。ESCキー・×ボタン・
+    // stream-check-window:close IPCのいずれで閉じても本ハンドラを通るため、ここ1箇所の対応で足りる。
+    // mainWindow自体が既に閉じられている（アプリ終了に伴うカスケードclose、L1333〜参照）場合は
+    // 何もしない。
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.focus();
+    }
   });
 
   streamCheckWindow.on('closed', () => {
@@ -3156,7 +3167,20 @@ function extractBalancedJsonAfter(html, marker) {
  * この抽出に失敗した場合（YouTube側のページ構造変化等）は、従来のページ全文検索
  * ヒューリスティックにフォールバックする。
  */
-async function resolveYoutubeLiveVideoIdFree(handleOrChannelId) {
+/**
+ * 2026-08-08追加（要望⑧: YouTubeの配信メタ情報取得）: ハンドル/チャンネルIDから、現在配信中の
+ * 動画ID・タイトル・カテゴリ・配信開始時刻をまとめて無料で解決する。
+ * resolveYoutubeLiveVideoIdFree()が動画IDの特定に使っていたのと全く同じHTML取得・
+ * ytInitialPlayerResponse抽出処理を流用し、そこに既に含まれているvideoDetails.title
+ * （タイトル）・microformat.playerMicroformatRenderer.category（YouTube側の大分類カテゴリ、
+ * Twitch/Kickのゲーム名ほど細かくないが同種の情報として表示に使う）・
+ * liveBroadcastDetails.startTimestamp（配信開始時刻、ISO8601文字列）を追加で取り出すだけで、
+ * 追加のHTTPリクエストは発生しない（YouTube側のレート制限/ブロックリスクを増やさないため重要）。
+ * 旧来のページ全文検索フォールバック（ytInitialPlayerResponseの抽出自体に失敗した場合）では
+ * タイトル・カテゴリ・開始時刻までは取れないため、その場合は空文字/nullのまま返す
+ * （表示側は値が無い項目を単に出さない設計のため実害はない）。
+ */
+async function fetchYoutubeLiveInfoFree(handleOrChannelId) {
   const input = String(handleOrChannelId || '').trim();
   const liveUrl = looksLikeYoutubeChannelId(input)
     ? `https://www.youtube.com/channel/${encodeURIComponent(input)}/live`
@@ -3166,12 +3190,17 @@ async function resolveYoutubeLiveVideoIdFree(handleOrChannelId) {
   const playerResponse = extractBalancedJsonAfter(html, 'ytInitialPlayerResponse');
   if (playerResponse) {
     const videoId = playerResponse.videoDetails && playerResponse.videoDetails.videoId;
-    const liveBroadcastDetails =
-      playerResponse.microformat &&
-      playerResponse.microformat.playerMicroformatRenderer &&
-      playerResponse.microformat.playerMicroformatRenderer.liveBroadcastDetails;
+    const microformat = playerResponse.microformat && playerResponse.microformat.playerMicroformatRenderer;
+    const liveBroadcastDetails = microformat && microformat.liveBroadcastDetails;
     if (videoId && liveBroadcastDetails) {
-      if (liveBroadcastDetails.isLiveNow === true) return videoId;
+      if (liveBroadcastDetails.isLiveNow === true) {
+        return {
+          videoId,
+          title: (playerResponse.videoDetails && playerResponse.videoDetails.title) || '',
+          category: (microformat && microformat.category) || '',
+          startedAt: liveBroadcastDetails.startTimestamp || null,
+        };
+      }
       // startTimestampはあるがendTimestampが無い＝配信予定（まだ開始前）である可能性が高い
       // （終了済みの過去配信はendTimestampが入る）。専用メッセージで区別する。
       const isUpcoming = !!liveBroadcastDetails.startTimestamp && !liveBroadcastDetails.endTimestamp;
@@ -3190,10 +3219,26 @@ async function resolveYoutubeLiveVideoIdFree(handleOrChannelId) {
     );
   }
   const canonicalMatch = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})"/);
-  if (canonicalMatch) return canonicalMatch[1];
+  if (canonicalMatch) return { videoId: canonicalMatch[1], title: '', category: '', startedAt: null };
   const videoIdMatch = html.match(/"videoId":"([\w-]{11})"/);
-  if (videoIdMatch) return videoIdMatch[1];
+  if (videoIdMatch) return { videoId: videoIdMatch[1], title: '', category: '', startedAt: null };
   throw new Error('配信中の動画IDを特定できませんでした（YouTube側のページ構造が変わった可能性があります）');
+}
+
+/**
+ * ハンドル（@name）またはチャンネルID（UC...）から、現在配信中の動画IDを無料で解決する。
+ * 動画IDのみが必要な既存の呼び出し元（loadYoutubeLiveStreamFree等）向けの薄いラッパー。
+ * 実際の取得・判定ロジックはfetchYoutubeLiveInfoFree()に統合されている（2026-08-08、
+ * 要望⑧対応でタイトル/カテゴリ/開始時刻も取れるよう拡張した際に統合）。
+ *
+ * #14対応（元依頼: 「@ハンドルで追加時、ライブ予定枠(スケジュール済み配信)が既にある場合に
+ * 配信が読み込まれない」）: ページ内の"isLiveNow":trueを無関係な箇所（関連動画欄等）に
+ * ヒットさせず誤判定しないよう、ytInitialPlayerResponse内のvideoDetails.videoIdと
+ * liveBroadcastDetails.isLiveNowを突き合わせて判定する（fetchYoutubeLiveInfoFree参照）。
+ */
+async function resolveYoutubeLiveVideoIdFree(handleOrChannelId) {
+  const info = await fetchYoutubeLiveInfoFree(handleOrChannelId);
+  return info.videoId;
 }
 
 /**
@@ -3207,6 +3252,24 @@ async function resolveYoutubeLiveVideoIdFreeWithRetry(handleOrChannelId, retries
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       return await resolveYoutubeLiveVideoIdFree(handleOrChannelId);
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * 2026-08-08追加（要望⑧）: fetchYoutubeLiveInfoFreeのリトライ付き版。統一フィードのカード表示用に
+ * タイトル・カテゴリ・開始時刻も含めて取得する（resolveYoutubeLiveVideoIdFreeWithRetryと
+ * 同じリトライ方針）。
+ */
+async function fetchYoutubeLiveInfoFreeWithRetry(handleOrChannelId, retries = 1) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetchYoutubeLiveInfoFree(handleOrChannelId);
     } catch (err) {
       lastErr = err;
       if (attempt < retries) await new Promise((r) => setTimeout(r, 500));
@@ -3432,7 +3495,10 @@ async function fetchUnifiedFeed(options = {}) {
             return;
           }
           try {
-            await resolveYoutubeLiveVideoIdFreeWithRetry(sub.handle);
+            // 2026-08-08修正（要望⑧）: 動画IDのみ返すresolveYoutubeLiveVideoIdFreeWithRetryから
+            // タイトル・カテゴリ・開始時刻も返すfetchYoutubeLiveInfoFreeWithRetryへ変更
+            // （追加リクエストなし、fetchYoutubeLiveInfoFree参照）。
+            const info = await fetchYoutubeLiveInfoFreeWithRetry(sub.handle);
             items.push({
               platform: 'youtube',
               channel: sub.handle,
@@ -3443,6 +3509,9 @@ async function fetchUnifiedFeed(options = {}) {
               isTarget: isAutoTuneInTarget('youtube', sub.handle),
               isPinned: false,
               isLive: true,
+              title: info.title || '',
+              category: info.category || '',
+              startedAt: info.startedAt || null,
             });
           } catch (_) {
             // 配信中ではない、またはハンドル解決失敗（リトライ後も失敗）。フィードには含めないだけでエラー扱いにはしない
@@ -3459,10 +3528,18 @@ async function fetchUnifiedFeed(options = {}) {
           // ピン留め分は保存データに画像を持っていないため、現在の登録一覧から拾えた時だけアバターを付ける
           const avatarUrl = subsByHandle.get(p.channel.toLowerCase())?.avatarUrl || null;
           let isLive = alreadyAdded;
+          let title = '';
+          let category = '';
+          let startedAt = null;
           if (!alreadyAdded) {
             try {
-              await resolveYoutubeLiveVideoIdFreeWithRetry(p.channel);
+              // 2026-08-08修正（要望⑧）: こちらもfetchYoutubeLiveInfoFreeWithRetryへ変更し、
+              // ピン留めチャンネルでもタイトル・カテゴリ・開始時刻を表示できるようにする。
+              const info = await fetchYoutubeLiveInfoFreeWithRetry(p.channel);
               isLive = true;
+              title = info.title || '';
+              category = info.category || '';
+              startedAt = info.startedAt || null;
             } catch (_) {
               isLive = false;
             }
@@ -3477,6 +3554,9 @@ async function fetchUnifiedFeed(options = {}) {
             isTarget: isAutoTuneInTarget('youtube', p.channel),
             isPinned: true,
             isLive,
+            title,
+            category,
+            startedAt,
           });
         });
       } catch (err) {
@@ -4458,14 +4538,34 @@ async function fetchKickFollowedChannels() {
  * kick.com/api/v2/channels/followedのレスポンス1件を正規化する。
  * フィールド名が非公開のため、複数の想定パターン（channel/broadcaster入れ子、
  * is_live/isLive、livestreamオブジェクトの有無等）を順に試す。
+ *
+ * 2026-08-08修正: 配信一覧でKickのアイコン・タイトル・カテゴリが常に空になる不具合の原因を調査した
+ * 結果、このエンドポイント（/api/v2/channels/followed）は単一チャンネル取得API
+ * （/api/v2/channels/{channel}、fetchKickStreamMeta参照）とは違い、channel/user/livestreamのような
+ * 入れ子構造ではなく、is_live・profile_picture・channel_slug・viewer_count・category_name・
+ * user_username・session_title が全てトップレベルのフラットなフィールドとして返ってくることが
+ * 判明した（外部の非公式Kick APIクライアント実装 kick-api（Rust、Landy-Dev/kick-api）の
+ * FollowedChannel構造体で確認。同クレートも本エンドポイントと同じセッショントークン認証を使っており、
+ * 信頼度の高い参照といえる）。これまでのコードは単一チャンネルAPIと同じ入れ子（channelObj.slug、
+ * livestream.session_title等）を期待していたため、slug/displayNameだけはuser_usernameの
+ * フォールバック経由で偶然拾えていたが、avatarUrl・title・categoryは常に取得できていなかった。
+ * フラットなフィールド名を最優先の候補にしつつ、将来のAPI変更や別レスポンス形状に備えて
+ * 旧来の入れ子候補もフォールバックとして残す。
  */
 function normalizeKickFollowedChannel(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const channelObj = raw.channel || raw.broadcaster || raw;
   const slug =
-    channelObj.slug || channelObj.user_username || channelObj.username || raw.slug || raw.user_username || raw.username;
+    raw.channel_slug ||
+    channelObj.slug ||
+    channelObj.user_username ||
+    channelObj.username ||
+    raw.slug ||
+    raw.user_username ||
+    raw.username;
   if (!slug) return null;
-  const displayName = channelObj.user?.username || channelObj.username || raw.user?.username || slug;
+  const displayName =
+    raw.user_username || channelObj.user?.username || channelObj.username || raw.user?.username || slug;
   const livestream = raw.livestream || channelObj.livestream || null;
   const isLive = Boolean(
     raw.is_live ?? raw.isLive ?? channelObj.is_live ?? (livestream ? livestream.is_live !== false : false)
@@ -4473,12 +4573,12 @@ function normalizeKickFollowedChannel(raw) {
   const viewerCount =
     Number(raw.viewer_count ?? channelObj.viewer_count ?? (livestream && livestream.viewer_count) ?? 0) || 0;
   // アバター画像（配信チェックパネルのカード表示用、2026-08-08追加）。
-  // この関数の他の項目と同様、Kick側のレスポンス形式は非公開のため候補パスを順に試すだけの
-  // リバースエンジニアリング実装で、実レスポンスでの検証はできていない（null が返ることも普通にある）。
-  // 表示側（overlay-panel.js）は avatarUrl が null / 読み込み失敗でもフォールバック画像を出すため実害はない。
+  // 表示側（overlay-panel.js/stream-check-window.js）は avatarUrl が null / 読み込み失敗でも
+  // フォールバック画像を出すため、候補が全て外れて null になっても実害はない。
   let avatarUrl = null;
   try {
     avatarUrl =
+      raw.profile_picture || // フラットレスポンスの実フィールド名（上記コメント参照）
       raw.user?.profile_pic ||
       raw.profile_pic ||
       channelObj.user?.profile_pic ||
@@ -4489,21 +4589,20 @@ function normalizeKickFollowedChannel(raw) {
   } catch (_) {
     avatarUrl = null; // 装飾要素なので、どんな形のレスポンスが来ても絶対にthrowさせない
   }
-  // タイトル・カテゴリ・配信時間（配信一覧のカード表示用、2026-08-08段階B追加）。
-  // fetchKickStreamMeta()（個別チャンネルAPI、L3517〜）が使っているのと同じフィールド名
-  // （livestream.session_title / livestream.categories[0].name / livestream.created_at）を、
-  // ここで既に取得済みの livestream から読むだけ（追加のリクエストは発生しない）。
-  // アバターと同様、Kickのレスポンス形式は非公開のため値が取れないこともある前提で、
-  // 表示側（stream-check-window.js）は値が無い項目を単に出さない設計にしてある。
+  // タイトル・カテゴリ（配信一覧のカード表示用、2026-08-08段階B追加、08-08修正でフラットな
+  // トップレベルフィールドに対応）。開始時刻(startedAt)はこのエンドポイントのフラット構造には
+  // 含まれていないため、livestream入れ子が取れた場合のみのフォールバック扱いとし、
+  // 取れない場合はnullのまま（表示側は値が無い項目を単に出さない設計）。
   let title = '';
   let category = '';
   let startedAt = null;
   try {
-    if (livestream) {
-      title = livestream.session_title || '';
-      category = (livestream.categories && livestream.categories[0] && livestream.categories[0].name) || '';
-      startedAt = livestream.created_at || null;
-    }
+    title = raw.session_title || (livestream && livestream.session_title) || '';
+    category =
+      raw.category_name ||
+      (livestream && livestream.categories && livestream.categories[0] && livestream.categories[0].name) ||
+      '';
+    startedAt = (livestream && livestream.created_at) || null;
   } catch (_) {
     title = '';
     category = '';
