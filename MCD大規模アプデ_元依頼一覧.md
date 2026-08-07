@@ -164,7 +164,13 @@
     非対応のため該当項目は省略許容。タイル配置は`computeAutoGridRects`類似の
     `computeMainSubRects`を新設し、既存の`layout-share`(applySharedLayout)のチャンネル適用
     パターンを踏襲する方針（段階3）。
-    → 段階1着手。
+    → **段階1「独立ウィンドウ土台＋グリッド表示」実装・独立レビューPASS済み、git commit f8b67e4。**
+    **段階2「クリック選択・取消とMAIN/SUB自動整列ロジック」も実装済み**（src/renderer/
+    layout-window/layout-window.js・layout-window.css）。MAIN/SUB1/SUB2/SUB3の最大4枠、
+    クリックした順に選択（自動整列バッジ表示）、選択済みカード再クリックで解除（splice()に
+    よる自動繰り上がり）、配信終了等で一覧から消えたチャンネルの選択も自動的に外す処理を実装。
+    残り: 段階3(メイン画面タイル配置への実際の反映)/段階4(デザイン仕上げ・エッジケース対応)。
+    実機での動作確認はまだ未実施。
 
 ## UIデザインについて（ユーザーからの補足）
 

@@ -1,11 +1,18 @@
 'use strict';
 
-// 複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階）の描画ロジック。
+// 複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階／2026-08-08第2段階でクリック選択追加）の描画ロジック。
 //
 // 第1段階のスコープは「開くと現在配信中のチャンネル一覧がカードのグリッドで並ぶ（見るだけ）」まで。
-// クリックによるMAIN/SUB割り当てと、メイン画面の配信タイル配置への反映は第2段階以降で追加する。
+// 第2段階として、配信者アイコンをクリックした順にMAIN→SUB1→SUB2→SUB3へ自動整列で選択し、
+// 選択済みカードを再クリックすると選択解除（自動整列＝残りの選択が詰めて繰り上がる）できる
+// ロジックを追加した。メイン画面の実際の配信タイル配置への反映（元依頼一覧item20の段階3）は
+// まだ対象外で、このウィンドウ内の選択状態を持つだけ。
 // データ取得は既存の unified-feed（main.jsのfetchUnifiedFeed）をそのまま再利用しており、
 // 既存の配信チェックパネル側のコードには一切手を加えていない（完全に独立した新規コードパス）。
+
+// MAIN + SUB1〜3 の最大4枠（元依頼一覧item20のスクリーンショット仕様に合わせる）。
+const SLOT_LABELS = ['MAIN', 'SUB1', 'SUB2', 'SUB3'];
+const MAX_SLOTS = SLOT_LABELS.length;
 
 // アバター画像が無い／読み込み失敗した時のフォールバック（overlay-panel.js と同じ図柄）。
 // CSPの都合でHTML属性の onerror= は使えないため、JS側でハンドラを付けて差し替える。
@@ -48,10 +55,40 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeBtn = document.getElementById('layout-close-btn');
 
   let loading = false;
+  // クリックした順に並ぶ「channelKey」の配列。先頭がMAIN、以降がSUB1/SUB2/SUB3に対応する。
+  // 配列operationだけで自動整列になる: 途中の要素をsplice(idx,1)で抜けば後続が自動的に繰り上がる。
+  let selectedOrder = [];
+  let selectionNotice = null; // 上限到達時などの一時メッセージ（再描画やload()の通常メッセージで上書きされる）
+
+  function channelKey(item) {
+    return `${item.platform}::${item.channel}`;
+  }
 
   function setStatus(text, isError) {
     statusEl.textContent = text || '';
     statusEl.classList.toggle('error', !!isError);
+  }
+
+  /** 現在のselectedOrderに基づき、既に描画済みの全カードの選択枠表示（MAIN/SUB1…バッジ・枠線）だけを
+   *  更新する。グリッド全体の再構築（render）は行わないため、スクロール位置や経過時間タイマーの
+   *  対象要素はそのまま保たれる。 */
+  function updateSelectionUI() {
+    grid.querySelectorAll('.layout-card').forEach((card) => {
+      const key = `${card.dataset.platform}::${card.dataset.channel}`;
+      const idx = selectedOrder.indexOf(key);
+      card.classList.toggle('is-selected', idx !== -1);
+      let badge = card.querySelector('.layout-card-slot-badge');
+      if (idx !== -1) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'layout-card-slot-badge';
+          card.appendChild(badge);
+        }
+        badge.textContent = SLOT_LABELS[idx];
+      } else if (badge) {
+        badge.remove();
+      }
+    });
   }
 
   /** カード1枚分のDOMを組み立てる。ユーザー由来の文字列は必ずtextContentで入れる（XSS対策）。 */
@@ -140,15 +177,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
     card.appendChild(main);
 
-    // 第2段階（MAIN/SUBの割り当て）で本実装する予定の place holder。現状は何も起きない。
     card.addEventListener('click', () => {
-      console.log('[layout-window] card clicked (第2段階で実装):', item.platform, item.channel);
+      const key = channelKey(item);
+      const idx = selectedOrder.indexOf(key);
+      if (idx !== -1) {
+        // 既に選択済み → 選択解除（自動整列: 後続のSUBが繰り上がる）
+        selectedOrder.splice(idx, 1);
+      } else if (selectedOrder.length >= MAX_SLOTS) {
+        // MAIN+SUB1〜3の4件で上限。読み込み中メッセージ等を上書きしないよう一時表示のみ行う。
+        setStatus('選択できるのはMAIN+SUB1〜3の最大4件までです（解除してから選び直してください）', true);
+        selectionNotice = true;
+        return;
+      } else {
+        selectedOrder.push(key);
+      }
+      if (selectionNotice) {
+        // 上限通知を出した直後の操作でクリアされた場合、通常の件数表示に戻す。
+        selectionNotice = null;
+        const count = grid.querySelectorAll('.layout-card').length;
+        setStatus(`${count}件`, false);
+      }
+      updateSelectionUI();
     });
 
     return card;
   }
 
   function render(items) {
+    // 配信が終了する等で一覧から消えたチャンネルの選択は自動的に外す（幽霊枠を残さない）。
+    // 自動整列（splice）で行うため、残った選択の順序・繰り上がりはそのまま保たれる。
+    const liveKeys = new Set(items.map((item) => channelKey(item)));
+    selectedOrder = selectedOrder.filter((key) => liveKeys.has(key));
+
     grid.textContent = '';
     if (!items.length) {
       const empty = document.createElement('div');
@@ -158,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     items.forEach((item) => grid.appendChild(buildCard(item)));
+    updateSelectionUI();
   }
 
   async function load() {

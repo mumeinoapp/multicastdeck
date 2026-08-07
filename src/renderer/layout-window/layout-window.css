@@ -130,6 +130,7 @@ body {
 }
 
 .layout-card {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -139,6 +140,32 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   min-width: 0;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.layout-card:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ---- 選択状態（第2段階: MAIN/SUB1〜3として選ばれたカード） ---- */
+.layout-card.is-selected {
+  border-color: #4f8cff;
+  box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.45), 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.layout-card-slot-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #0b0b0d;
+  background: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .layout-card-avatar {
