@@ -28,4 +28,28 @@ contextBridge.exposeInMainWorld('streamCheckApi', {
   // overlay-panel.js側の同名機能(#8対応)と同じstoreキーを共用する。
   getUnifiedFeedPlatformFilter: () => ipcRenderer.invoke('unified-feed:get-platform-filter'),
   setUnifiedFeedPlatformFilter: (filter) => ipcRenderer.invoke('unified-feed:set-platform-filter', filter),
+
+  // ---- 段階C追加（2026-08-08）: 自動追加の対象を選ぶ／フォロー配信者の自動追加 ----
+  // IPCチャンネル名はoverlay-panel-preload.jsの同名メソッドと完全に一致させてある
+  // （main.js側のハンドラを無改造で共用するため）。startTwitchAuthのみ、main.js側で
+  // event.senderからホストウィンドウ（このウィンドウ自身）を解決するよう修正済みなので、
+  // こちら側からは特別な引数は不要。
+  getAutoTuneInTargets: () => ipcRenderer.invoke('auto-tune-in:get-targets'),
+  setAutoTuneInTargets: (targets) => ipcRenderer.invoke('auto-tune-in:set-targets', targets),
+  fetchAllFollowCandidates: () => ipcRenderer.invoke('auto-tune-in:fetch-all-follow-candidates'),
+
+  getFeedPinnedYoutube: () => ipcRenderer.invoke('feed-pin:get-youtube'),
+  setFeedPinnedYoutube: (list) => ipcRenderer.invoke('feed-pin:set-youtube', list),
+
+  getAutoTuneInStatus: () => ipcRenderer.invoke('auto-tune-in:get-status'),
+  setAutoTuneInConfig: (partial) => ipcRenderer.invoke('auto-tune-in:set-config', partial),
+  startTwitchAuth: () => ipcRenderer.invoke('auto-tune-in:start-auth'),
+  cancelTwitchAuth: () => ipcRenderer.invoke('auto-tune-in:cancel-auth'),
+  disconnectTwitchAuth: () => ipcRenderer.invoke('auto-tune-in:disconnect'),
+  onAutoTuneInError: (cb) => ipcRenderer.on('auto-tune-in:error', (_e, payload) => cb(payload)),
+  onAutoTuneInAuthLost: (cb) => ipcRenderer.on('auto-tune-in:auth-lost', () => cb()),
+  // 認証画面（BrowserView）がこのウィンドウ自身に重なった/外れたタイミングの通知
+  // （main.js openTwitchAuthView/closeTwitchAuthView参照、ホストがこのウィンドウの時のみ届く）。
+  onTwitchAuthViewOpened: (cb) => ipcRenderer.on('auto-tune-in:auth-view-opened', () => cb()),
+  onTwitchAuthViewClosed: (cb) => ipcRenderer.on('auto-tune-in:auth-view-closed', () => cb()),
 });

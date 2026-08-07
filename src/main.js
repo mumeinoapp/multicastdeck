@@ -1436,7 +1436,15 @@ function createStreamCheckWindow() {
     }
   });
 
+  // Twitch連携をこのウィンドウから開始した場合、認証用BrowserViewをこのウィンドウ自身に
+  // addBrowserViewする（openTwitchAuthView参照）。リサイズに追従させ、閉じられた場合は
+  // 認証画面ごと確実に破棄する（孤立防止）。
+  streamCheckWindow.on('resize', () => {
+    if (twitchAuthHostWindow === streamCheckWindow) relayoutTwitchAuthView();
+  });
+
   streamCheckWindow.on('closed', () => {
+    if (twitchAuthHostWindow === streamCheckWindow) closeTwitchAuthView();
     streamCheckWindow = null;
   });
 
@@ -1840,6 +1848,18 @@ function notifyRenderer(channel, payload) {
       }
     } catch (_) {
       /* パネルが閉じられた直後などは無視（通知は装飾的なもので、失敗しても本処理に影響させない） */
+    }
+  }
+  // 2026-08-08追加: 配信一覧（streamCheckWindow）はmainWindowとは別のBrowserWindowのため、
+  // 上記のoverlayPanelView中継の対象外。開いている間はauto-tune-in:error/auth-lostも
+  // 同様に中継する（Twitchトークン失効等はいつ起きるか分からないため）。
+  if (streamCheckWindow && !streamCheckWindow.isDestroyed() && OVERLAY_PANEL_FORWARDED_CHANNELS.has(channel)) {
+    try {
+      if (!streamCheckWindow.webContents.isDestroyed()) {
+        streamCheckWindow.webContents.send(channel, payload);
+      }
+    } catch (_) {
+      /* ウィンドウが閉じられた直後などは無視 */
     }
   }
 }
@@ -3954,39 +3974,59 @@ const TWITCH_OAUTH_REDIRECT_URI = `http://localhost:${TWITCH_OAUTH_REDIRECT_PORT
 const TWITCH_OAUTH_SCOPES = 'user:read:follows';
 
 let twitchAuthView = null;
+let twitchAuthHostWindow = null; // 認証画面を重ねているホストウィンドウ（mainWindow or streamCheckWindow）
 let twitchAuthCancelFn = null; // 進行中のOAuthフローをキャンセルするための関数（無ければ進行中フローなし）
 
-function openTwitchAuthView(url) {
-  if (!mainWindow) return;
+// 2026-08-08追加: 配信一覧が独立BrowserWindow（parent:mainWindow）になったことで、Twitch連携を
+// 配信一覧ウィンドウ側から開始した場合、認証用BrowserViewをmainWindowにaddBrowserViewしても
+// 常に手前にいる子ウィンドウ（配信一覧）に隠れて操作不能になる問題があった。そのため
+// 「今それを開いた張本人のウィンドウ」に認証画面を重ねるよう、ホストウィンドウを引数化して
+// 一般化した（mainWindow・streamCheckWindowのどちらから呼ばれても正しく動く）。
+const STREAM_CHECK_AUTH_VIEW_TOP = 44; // stream-check-window.cssの.stream-check-window-header実測高さ相当
+
+function getTwitchAuthViewTopOffset(hostWindow) {
+  return hostWindow === streamCheckWindow ? STREAM_CHECK_AUTH_VIEW_TOP : HEADER_HEIGHT;
+}
+
+function openTwitchAuthView(url, hostWindow) {
+  const host = hostWindow && !hostWindow.isDestroyed() ? hostWindow : mainWindow;
+  if (!host) return;
   if (twitchAuthView) closeTwitchAuthView();
   // BrowserViewは追加した順に手前へ積み重なるため、既存の配信タイル等より後に追加すれば
   // 自動的に最前面に表示される（アカウント連携ログイン画面と同じ考え方）。
   twitchAuthView = new BrowserView({
     webPreferences: { contextIsolation: true, sandbox: true, partition: PLATFORM_CONFIG.twitch.partition },
   });
+  twitchAuthHostWindow = host;
   forwardEscapeKey(twitchAuthView.webContents);
-  mainWindow.addBrowserView(twitchAuthView);
+  host.addBrowserView(twitchAuthView);
   twitchAuthView.webContents.loadURL(url).catch((err) => {
     if (isBenignNavigationError(err)) return;
   });
   relayoutTwitchAuthView();
-  // 2026-08-08追加: 連携開始ボタンが「配信チェック」パネル（overlayPanelView側のHTML）へ
-  // 移ったため、メインウィンドウ側のヘッダーロック・「連携画面を閉じる」ボタンの出し入れは
-  // レンダラーのクリックハンドラではなくこの通知で行う（旧: renderer.js側で直接切り替えていた）。
-  notifyRenderer('auto-tune-in:auth-view-opened');
+  // ホスト別にヘッダーロック・「連携画面を閉じる」ボタンの出し入れを通知する。mainWindow時は
+  // 従来通りnotifyRenderer()経由（renderer.js側のハンドラ）、streamCheckWindow時はそちらの
+  // webContentsへ直接送る（notifyRenderer()はmainWindow固定のため使わない）。
+  if (host === mainWindow) {
+    notifyRenderer('auto-tune-in:auth-view-opened');
+  } else if (host.webContents && !host.webContents.isDestroyed()) {
+    host.webContents.send('auto-tune-in:auth-view-opened');
+  }
 }
 
 function relayoutTwitchAuthView() {
-  if (!twitchAuthView || !mainWindow) return;
-  const { width, height } = mainWindow.getContentBounds();
-  twitchAuthView.setBounds({ x: 0, y: HEADER_HEIGHT, width, height: height - HEADER_HEIGHT });
+  if (!twitchAuthView || !twitchAuthHostWindow || twitchAuthHostWindow.isDestroyed()) return;
+  const { width, height } = twitchAuthHostWindow.getContentBounds();
+  const top = getTwitchAuthViewTopOffset(twitchAuthHostWindow);
+  twitchAuthView.setBounds({ x: 0, y: top, width, height: Math.max(0, height - top) });
 }
 
 function closeTwitchAuthView() {
-  if (!twitchAuthView || !mainWindow) return;
+  if (!twitchAuthView) return;
   const view = twitchAuthView;
+  const host = twitchAuthHostWindow;
   try {
-    mainWindow.removeBrowserView(view);
+    if (host && !host.isDestroyed()) host.removeBrowserView(view);
   } catch (_) {
     /* 既に外れている場合などは無視 */
   }
@@ -3997,18 +4037,30 @@ function closeTwitchAuthView() {
   }
   scheduleWebContentsDestroy(view.webContents);
   twitchAuthView = null;
+  twitchAuthHostWindow = null;
   // 連携画面は addBrowserView で後から積んだぶん overlayPanelView より前面に来ているため、
-  // 閉じたあとはオーバーレイパネル（配信チェック等）を確実に最前面へ戻す。
+  // 閉じたあとはオーバーレイパネル（配信チェック等）を確実に最前面へ戻す（ホストがmainWindowの
+  // 場合のみ。streamCheckWindowホスト時はBrowserView重ねが無いため不要）。
   // なおパネル自体は連携中も閉じていない（閉じるとabout:blankへ遷移してJSごと破棄され、
   // startTwitchAuth()のawaitが結果を受け取れなくなるため）。
-  if (overlayPanelOpenId && overlayPanelView && mainWindow && typeof mainWindow.setTopBrowserView === 'function') {
+  if (
+    host === mainWindow &&
+    overlayPanelOpenId &&
+    overlayPanelView &&
+    mainWindow &&
+    typeof mainWindow.setTopBrowserView === 'function'
+  ) {
     try {
       mainWindow.setTopBrowserView(overlayPanelView);
     } catch (_) {
       /* ignore */
     }
   }
-  notifyRenderer('auto-tune-in:auth-view-closed');
+  if (host === mainWindow) {
+    notifyRenderer('auto-tune-in:auth-view-closed');
+  } else if (host && !host.isDestroyed() && host.webContents && !host.webContents.isDestroyed()) {
+    host.webContents.send('auto-tune-in:auth-view-closed');
+  }
 }
 
 /** 認可コードをアクセストークン・リフレッシュトークンに交換し、ユーザー情報を取得して保存する */
@@ -4049,7 +4101,7 @@ async function exchangeTwitchAuthCode(code, clientId, clientSecret) {
  * （カスタムプロトコル登録は不要で、未インストーラー版でも動作検証できる）。
  * 呼び出し元（IPC）へは、連携が完了・失敗・キャンセルのいずれかで確定するまで待たせる。
  */
-function startTwitchUserAuth() {
+function startTwitchUserAuth(hostWindow) {
   return new Promise((resolve) => {
     if (twitchAuthCancelFn) {
       resolve({ ok: false, error: '既に連携処理が進行中です' });
@@ -4123,7 +4175,7 @@ function startTwitchUserAuth() {
         `&redirect_uri=${encodeURIComponent(TWITCH_OAUTH_REDIRECT_URI)}` +
         `&scope=${encodeURIComponent(TWITCH_OAUTH_SCOPES)}` +
         `&state=${encodeURIComponent(state)}`;
-      openTwitchAuthView(authorizeUrl);
+      openTwitchAuthView(authorizeUrl, hostWindow);
     });
 
     timeoutHandle = setTimeout(() => {
@@ -6188,7 +6240,15 @@ ipcMain.handle('drops-auto:get-status', () => {
 
 // ---- Auto Tune-In ----
 
-ipcMain.handle('auto-tune-in:start-auth', () => startTwitchUserAuth());
+// 2026-08-08追加: 呼び出し元（mainWindow or streamCheckWindow）を認証画面の表示先として使うため、
+// event.senderからホストウィンドウを解決する。streamCheckWindowはBrowserViewではなく自分自身が
+// webContentsを持つ独立BrowserWindowのため、BrowserWindow.fromWebContentsで直接取得できる
+// （overlayPanelView等のBrowserView経由の場合はここでは取れないため、その場合はmainWindowに
+// フォールバックする＝従来通りの挙動を維持）。
+ipcMain.handle('auto-tune-in:start-auth', (event) => {
+  const hostWindow = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  return startTwitchUserAuth(hostWindow);
+});
 
 ipcMain.handle('auto-tune-in:cancel-auth', () => {
   if (twitchAuthCancelFn) twitchAuthCancelFn();

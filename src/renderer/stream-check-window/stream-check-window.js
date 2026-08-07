@@ -73,6 +73,20 @@ function platformBadgeText(platform) {
   return '●';
 }
 
+/** プラットフォーム表示名（サイト別グループ見出し用）。 */
+function platformDisplayName(platform) {
+  if (platform === 'youtube') return 'YouTube';
+  if (platform === 'kick') return 'Kick';
+  return 'Twitch';
+}
+
+/** 「自動追加の対象にする」チェックボックスのtitle（ホバー時の詳細説明）。overlay-panel.jsと同文言。 */
+function autoTuneInTargetTitle(platform) {
+  return platform === 'youtube'
+    ? '自動追加の対象にする（YouTubeはチェックを付けないと自動追加されません）'
+    : '自動追加の対象にする（チェックした配信者のみが対象になります）';
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const grid = document.getElementById('stream-check-card-grid');
   const statusEl = document.getElementById('stream-check-status');
@@ -85,6 +99,28 @@ document.addEventListener('DOMContentLoaded', () => {
   let platformFilter = 'all';
   let unifiedFeedItems = [];
   let autoTimer = null;
+
+  // ---- 段階C追加（2026-08-08）: 自動追加の対象を選ぶ／フォロー配信者の自動追加 ----
+  const tabBtns = Array.from(document.querySelectorAll('.stream-check-tab-btn'));
+  const tabContents = Array.from(document.querySelectorAll('.stream-check-tab-content'));
+  const targetsLoadBtn = document.getElementById('stream-check-targets-load-btn');
+  const targetsStatusEl = document.getElementById('stream-check-targets-status');
+  const targetsListEl = document.getElementById('stream-check-targets-list');
+  const targetsSortBtns = Array.from(document.querySelectorAll('.stream-check-window-sort-btn'));
+
+  const autoTuneStatusDot = document.getElementById('stream-check-auto-tune-status-dot');
+  const autoTuneStatusEl = document.getElementById('stream-check-auto-tune-status');
+  const autoTuneMessageEl = document.getElementById('stream-check-auto-tune-message');
+  const autoTuneConnectBtn = document.getElementById('stream-check-auto-tune-connect-btn');
+  const autoTuneDisconnectBtn = document.getElementById('stream-check-auto-tune-disconnect-btn');
+  const autoTuneEnabledInput = document.getElementById('stream-check-auto-tune-enabled-input');
+  const autoTuneMaxInput = document.getElementById('stream-check-auto-tune-max-input');
+
+  const authLockEl = document.getElementById('stream-check-auth-lock');
+  const authCancelBtn = document.getElementById('stream-check-auth-cancel-btn');
+
+  let allFollowCandidates = [];
+  let targetsSortMode = 'site'; // 'site' | 'name'
 
   function setStatus(text, isError) {
     statusEl.textContent = text || '';
@@ -102,6 +138,38 @@ document.addEventListener('DOMContentLoaded', () => {
     card.className = `stream-check-card${offline ? ' offline' : ''}`;
     card.dataset.platform = item.platform;
     card.dataset.channel = item.channel;
+
+    // 段階C追加: 「自動追加の対象にする」（Twitch/YouTube専用）「常に表示（ピン留め、YouTube専用）」
+    // チェックボックス。段階Bではスコープ外だったが、対象選択タブとの相互同期のためカードにも復活させる。
+    if (item.platform !== 'kick') {
+      const targetCheckbox = document.createElement('input');
+      targetCheckbox.type = 'checkbox';
+      targetCheckbox.className = 'stream-check-card-target-checkbox';
+      targetCheckbox.checked = !!item.isTarget;
+      targetCheckbox.title = autoTuneInTargetTitle(item.platform);
+      targetCheckbox.addEventListener('change', async (e) => {
+        const checked = e.target.checked;
+        item.isTarget = checked;
+        await toggleAutoTuneInTarget(item.platform, item.channel, checked);
+        syncTargetCheckboxAcrossLists(item.platform, item.channel, checked);
+      });
+      card.appendChild(targetCheckbox);
+    }
+    if (item.platform === 'youtube') {
+      const pinCheckbox = document.createElement('input');
+      pinCheckbox.type = 'checkbox';
+      pinCheckbox.className = 'stream-check-card-pin-checkbox';
+      pinCheckbox.checked = !!item.isPinned;
+      pinCheckbox.title = '常に表示（ピン留め、オンライン/オフライン問わず自分で外すまで表示し続ける）';
+      pinCheckbox.addEventListener('change', async (e) => {
+        const checked = e.target.checked;
+        item.isPinned = checked;
+        await toggleFeedPin(item.channel, item.displayName, checked);
+        syncPinCheckboxAcrossLists(item.channel, checked);
+        render();
+      });
+      card.appendChild(pinCheckbox);
+    }
 
     const avatar = document.createElement('img');
     avatar.className = 'stream-check-card-avatar';
@@ -350,6 +418,245 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // ---- 段階C: 対象指定・ピン留めの保存・同期（overlay-panel.jsのmountUnifiedFeed()から移植） ----
+
+  /** Auto Tune-Inの対象指定リストへのチェックボックスON/OFFを反映する。 */
+  async function toggleAutoTuneInTarget(platform, channel, checked) {
+    const key = channel.toLowerCase();
+    const current = await window.streamCheckApi.getAutoTuneInTargets();
+    const next = checked
+      ? current.some((t) => t.platform === platform && t.channel.toLowerCase() === key)
+        ? current
+        : [...current, { platform, channel }]
+      : current.filter((t) => !(t.platform === platform && t.channel.toLowerCase() === key));
+    await window.streamCheckApi.setAutoTuneInTargets(next);
+  }
+
+  /** 配信中一覧タブ・対象選択タブのどちらかでチェックが変わったら、もう一方も見た目を同期する。 */
+  function syncTargetCheckboxAcrossLists(platform, channel, checked) {
+    const key = channel.toLowerCase();
+    const feedItem = unifiedFeedItems.find((f) => f.platform === platform && f.channel.toLowerCase() === key);
+    if (feedItem && feedItem.isTarget !== checked) {
+      feedItem.isTarget = checked;
+      render();
+    }
+    const allItem = allFollowCandidates.find((f) => f.platform === platform && f.channel.toLowerCase() === key);
+    if (allItem && allItem.isTarget !== checked) {
+      allItem.isTarget = checked;
+      renderTargetsList();
+    }
+  }
+
+  /** フィードへの「常時表示（ピン留め）」ON/OFFを反映する（YouTube専用）。 */
+  async function toggleFeedPin(channel, displayName, checked) {
+    const key = channel.toLowerCase();
+    const current = await window.streamCheckApi.getFeedPinnedYoutube();
+    const next = checked
+      ? current.some((p) => p.channel.toLowerCase() === key)
+        ? current
+        : [...current, { channel, displayName }]
+      : current.filter((p) => p.channel.toLowerCase() !== key);
+    await window.streamCheckApi.setFeedPinnedYoutube(next);
+  }
+
+  function syncPinCheckboxAcrossLists(channel, checked) {
+    const key = channel.toLowerCase();
+    const feedItem = unifiedFeedItems.find((f) => f.platform === 'youtube' && f.channel.toLowerCase() === key);
+    if (feedItem && feedItem.isPinned !== checked) feedItem.isPinned = checked;
+    const allItem = allFollowCandidates.find((f) => f.platform === 'youtube' && f.channel.toLowerCase() === key);
+    if (allItem && allItem.isPinned !== checked) allItem.isPinned = checked;
+  }
+
+  // ---- 段階C: 自動追加の対象を選ぶ（全フォロー/登録一覧） ----
+
+  /** 1行分のDOM（対象指定チェック・ピン留めチェック・バッジ・名前）。XSS対策としてtextContentのみ使用。 */
+  function buildTargetRow(item) {
+    const row = document.createElement('div');
+    row.className = 'stream-check-target-row';
+
+    if (item.platform !== 'kick') {
+      const targetCheckbox = document.createElement('input');
+      targetCheckbox.type = 'checkbox';
+      targetCheckbox.checked = !!item.isTarget;
+      targetCheckbox.title = autoTuneInTargetTitle(item.platform);
+      targetCheckbox.addEventListener('change', async (e) => {
+        const checked = e.target.checked;
+        item.isTarget = checked;
+        await toggleAutoTuneInTarget(item.platform, item.channel, checked);
+        syncTargetCheckboxAcrossLists(item.platform, item.channel, checked);
+      });
+      row.appendChild(targetCheckbox);
+    }
+    if (item.platform === 'youtube') {
+      const pinCheckbox = document.createElement('input');
+      pinCheckbox.type = 'checkbox';
+      pinCheckbox.checked = !!item.isPinned;
+      pinCheckbox.title = '常に表示（ピン留め、オンライン/オフライン問わず自分で外すまで表示し続ける）';
+      pinCheckbox.addEventListener('change', async (e) => {
+        const checked = e.target.checked;
+        item.isPinned = checked;
+        await toggleFeedPin(item.channel, item.displayName, checked);
+        syncPinCheckboxAcrossLists(item.channel, checked);
+      });
+      row.appendChild(pinCheckbox);
+    }
+
+    const badge = document.createElement('span');
+    badge.className = `stream-check-card-platform-badge ${item.platform}`;
+    badge.textContent = platformBadgeText(item.platform);
+    row.appendChild(badge);
+
+    const name = document.createElement('span');
+    name.className = 'stream-check-target-row-name';
+    name.textContent = item.displayName;
+    name.title = item.displayName;
+    row.appendChild(name);
+
+    return row;
+  }
+
+  /** サイト別（Twitch→YouTube→Kick、各内は名前順）にグループ化して描画する。 */
+  function renderTargetsGroupedBySite() {
+    targetsListEl.textContent = '';
+    ['twitch', 'youtube', 'kick'].forEach((platform) => {
+      const group = allFollowCandidates
+        .filter((item) => item.platform === platform)
+        .sort((a, b) => a.displayName.localeCompare(b.displayName, 'ja'));
+      if (!group.length) return;
+      const heading = document.createElement('div');
+      heading.className = 'stream-check-targets-group-heading';
+      heading.textContent = platformDisplayName(platform);
+      targetsListEl.appendChild(heading);
+      group.forEach((item) => targetsListEl.appendChild(buildTargetRow(item)));
+    });
+  }
+
+  /** 五十音/アルファベット順（プラットフォーム問わず1本の名前順）に描画する。 */
+  function renderTargetsSortedByName() {
+    targetsListEl.textContent = '';
+    const sorted = [...allFollowCandidates].sort((a, b) => a.displayName.localeCompare(b.displayName, 'ja'));
+    sorted.forEach((item) => targetsListEl.appendChild(buildTargetRow(item)));
+  }
+
+  function renderTargetsList() {
+    if (!allFollowCandidates.length) {
+      targetsListEl.textContent = '';
+      const empty = document.createElement('div');
+      empty.className = 'stream-check-target-empty';
+      empty.textContent = '「🔄 全フォロー/登録一覧を読み込む」を押してください';
+      targetsListEl.appendChild(empty);
+      return;
+    }
+    if (targetsSortMode === 'name') renderTargetsSortedByName();
+    else renderTargetsGroupedBySite();
+  }
+
+  targetsSortBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      targetsSortMode = btn.dataset.sort;
+      targetsSortBtns.forEach((b) => b.classList.toggle('active', b === btn));
+      renderTargetsList();
+    });
+  });
+
+  targetsLoadBtn.addEventListener('click', async () => {
+    targetsStatusEl.textContent = '取得中...(登録数が多いと時間がかかることがあります)';
+    targetsStatusEl.classList.remove('error');
+    targetsLoadBtn.disabled = true;
+    try {
+      const { items, errors } = await window.streamCheckApi.fetchAllFollowCandidates();
+      allFollowCandidates = items;
+      renderTargetsList();
+      const errMessages = [];
+      if (errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
+      if (errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
+      targetsStatusEl.textContent = errMessages.join(' / ') || `${items.length}件取得しました`;
+      targetsStatusEl.classList.toggle('error', errMessages.length > 0);
+    } catch (err) {
+      targetsStatusEl.textContent = `取得に失敗しました: ${String((err && err.message) || err)}`;
+      targetsStatusEl.classList.add('error');
+    } finally {
+      targetsLoadBtn.disabled = false;
+    }
+  });
+
+  // ---- 段階C: フォロー配信者の自動追加（Twitchアカウント連携） ----
+
+  async function refreshAutoTuneInStatus() {
+    const status = await window.streamCheckApi.getAutoTuneInStatus();
+    if (status.connected) {
+      autoTuneStatusDot.className = 'stream-check-auto-tune-status-dot connected';
+      autoTuneStatusEl.textContent = '連携済み Twitch';
+      autoTuneConnectBtn.classList.add('hidden');
+      autoTuneDisconnectBtn.classList.remove('hidden');
+    } else {
+      autoTuneStatusDot.className = 'stream-check-auto-tune-status-dot disconnected';
+      autoTuneStatusEl.textContent = '未連携 Twitch';
+      autoTuneConnectBtn.classList.remove('hidden');
+      autoTuneDisconnectBtn.classList.add('hidden');
+    }
+    autoTuneEnabledInput.disabled = !status.canEnable;
+    autoTuneMaxInput.disabled = !status.canEnable;
+    autoTuneEnabledInput.checked = status.enabled;
+    autoTuneMaxInput.value = status.maxTiles;
+  }
+
+  autoTuneConnectBtn.addEventListener('click', async () => {
+    autoTuneMessageEl.textContent = '連携処理中...';
+    const result = await window.streamCheckApi.startTwitchAuth();
+    if (result.ok) {
+      autoTuneMessageEl.textContent = `連携しました（${result.login}としてログイン中）`;
+    } else if (!result.cancelled) {
+      autoTuneMessageEl.textContent = `エラー: ${result.error}`;
+    } else {
+      autoTuneMessageEl.textContent = '';
+    }
+    refreshAutoTuneInStatus();
+  });
+
+  autoTuneDisconnectBtn.addEventListener('click', async () => {
+    await window.streamCheckApi.disconnectTwitchAuth();
+    refreshAutoTuneInStatus();
+  });
+
+  autoTuneEnabledInput.addEventListener('change', async () => {
+    await window.streamCheckApi.setAutoTuneInConfig({ enabled: autoTuneEnabledInput.checked });
+  });
+
+  autoTuneMaxInput.addEventListener('change', async () => {
+    const v = Math.max(1, Math.min(20, Number(autoTuneMaxInput.value) || 1));
+    autoTuneMaxInput.value = v;
+    await window.streamCheckApi.setAutoTuneInConfig({ maxTiles: v });
+  });
+
+  window.streamCheckApi.onAutoTuneInError(({ message }) => {
+    autoTuneMessageEl.textContent = `エラー: ${message}`;
+  });
+
+  window.streamCheckApi.onAutoTuneInAuthLost(() => {
+    autoTuneMessageEl.textContent = 'Twitchとの連携が切れました。「Twitch連携」から再連携してください。';
+    refreshAutoTuneInStatus();
+  });
+
+  // 認証画面（BrowserView）がこのウィンドウに重なっている間はロック表示を出す
+  // （main.jsのopenTwitchAuthView/closeTwitchAuthViewからの通知、ホストがこのウィンドウの時のみ届く）。
+  window.streamCheckApi.onTwitchAuthViewOpened(() => {
+    authLockEl.classList.remove('hidden');
+  });
+  window.streamCheckApi.onTwitchAuthViewClosed(() => {
+    authLockEl.classList.add('hidden');
+  });
+  authCancelBtn.addEventListener('click', () => window.streamCheckApi.cancelTwitchAuth());
+
+  // ---- 段階C: タブ切替（配信中一覧／自動追加の対象） ----
+  tabBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      tabBtns.forEach((b) => b.classList.toggle('active', b === btn));
+      tabContents.forEach((c) => c.classList.toggle('hidden', c.dataset.tabContent !== tab));
+    });
+  });
+
   // ---- 初期化 ----
   (async function init() {
     try {
@@ -360,5 +667,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     await load();
     startAutoTimer();
+    refreshAutoTuneInStatus();
   })();
 });

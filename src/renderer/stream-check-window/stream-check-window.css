@@ -18,6 +18,10 @@
   box-sizing: border-box;
 }
 
+.hidden {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -121,7 +125,8 @@ body {
   gap: 6px;
 }
 
-.stream-check-window-filter-btn {
+.stream-check-window-filter-btn,
+.stream-check-window-sort-btn {
   appearance: none;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: #26262e;
@@ -132,11 +137,13 @@ body {
   cursor: pointer;
 }
 
-.stream-check-window-filter-btn:hover {
+.stream-check-window-filter-btn:hover,
+.stream-check-window-sort-btn:hover {
   color: #e4e4e7;
 }
 
-.stream-check-window-filter-btn.active {
+.stream-check-window-filter-btn.active,
+.stream-check-window-sort-btn.active {
   color: #0b0b0d;
   border-color: transparent;
   background: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%);
@@ -224,6 +231,14 @@ body {
 .stream-check-card.offline {
   opacity: 0.55;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* 段階C追加: 対象指定・ピン留めチェックボックス（アバターの左に並ぶ）。 */
+.stream-check-card-target-checkbox,
+.stream-check-card-pin-checkbox {
+  flex-shrink: 0;
+  margin-top: 4px;
+  cursor: pointer;
 }
 
 .stream-check-card-avatar {
@@ -372,4 +387,189 @@ body {
 
 .stream-check-card-remove-btn:hover:not(:disabled) {
   background: rgba(255, 100, 100, 0.12);
+}
+
+/* ---- 段階C追加（2026-08-08）: フォロー配信者の自動追加（Twitch連携）圧縮バー ----
+ * 旧overlay-panel.jsの縦長ブロック（見出し・注記・状態行・メッセージ・チェック・入力を別々の
+ * 行に並べていたもの）を1行に圧縮。詳しい説明文はヘルプ側の既存記載に譲り、ここでは操作に
+ * 必要な最小限の要素のみを残す。 */
+.stream-check-auto-tune-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #1f1f23;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.stream-check-auto-tune-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+  flex-shrink: 0;
+}
+
+.stream-check-auto-tune-status-dot.connected {
+  background: #22d3ee;
+}
+
+.stream-check-auto-tune-status-dot.disconnected {
+  background: #6b7280;
+}
+
+.stream-check-auto-tune-status {
+  color: #d4d4d8;
+  white-space: nowrap;
+}
+
+.stream-check-auto-tune-btn {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #26262e;
+  color: #e4e4e7;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.stream-check-auto-tune-btn:hover {
+  background: #2f2f39;
+}
+
+.stream-check-auto-tune-checkbox-row,
+.stream-check-auto-tune-max-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #d4d4d8;
+  white-space: nowrap;
+}
+
+.stream-check-auto-tune-max-row input {
+  width: 48px;
+  background: #26262e;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  color: #e4e4e7;
+  padding: 2px 4px;
+}
+
+.stream-check-auto-tune-message {
+  color: #ff9f43;
+  margin-left: auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 段階C追加: 認証画面（BrowserView）が重なっている間のロック表示 ---- */
+.stream-check-auth-lock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 16px;
+  background: linear-gradient(135deg, rgba(79, 140, 255, 0.18) 0%, rgba(34, 211, 238, 0.18) 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.stream-check-auth-lock button {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #26262e;
+  color: #e4e4e7;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* ---- 段階C追加: タブ切替（配信中一覧／自動追加の対象） ---- */
+.stream-check-tab-group {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  background: #1f1f23;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.stream-check-tab-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.stream-check-tab-btn:hover {
+  color: #e4e4e7;
+}
+
+.stream-check-tab-btn.active {
+  color: #e4e4e7;
+  font-weight: 700;
+  border-bottom: 2px solid;
+  border-image: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%) 1;
+}
+
+.stream-check-tab-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- 段階C追加: 自動追加の対象を選ぶタブ（全フォロー/登録一覧） ---- */
+.stream-check-targets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stream-check-targets-group-heading {
+  font-size: 12px;
+  font-weight: 700;
+  color: #9aa3b2;
+  margin: 12px 0 4px;
+}
+
+.stream-check-targets-group-heading:first-child {
+  margin-top: 0;
+}
+
+.stream-check-target-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #26262e;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+
+.stream-check-target-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stream-check-target-empty {
+  color: #a1a1aa;
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
 }

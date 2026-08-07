@@ -23,6 +23,12 @@
   ため、このHTML内の自作ヘッダーが唯一のタイトルバー表示になった（-webkit-app-region:dragで
   ドラッグ移動を担う、CSS側参照）。更新ボタンはヘッダーからツールバー（最終更新の左）へ移設、
   読み込み中/エラー表示もツールバー内に統合して独立の全幅行を廃止した。
+
+  2026-08-08 段階C追加: 「自動追加の対象を選ぶ」「フォロー配信者の自動追加」をoverlay-panel.js
+  (mountUnifiedFeed)から移植した。フォロー自動追加（Twitch連携）はヘッダー直下の圧縮バー
+  （#stream-check-auto-tune-bar）に、対象を選ぶ機能は新設タブ「自動追加の対象」
+  （#stream-check-targets-tab-content）にそれぞれ配置。既存の「配信中一覧」タブは
+  段階Bの内容をそのまま`data-tab-content="live"`でラップしただけで中身は無改造。
 -->
 <html lang="ja">
   <head>
@@ -46,23 +52,73 @@
         </div>
       </header>
 
-      <div class="stream-check-window-toolbar">
-        <div class="stream-check-window-filter-group" id="stream-check-filter-group">
-          <button class="stream-check-window-filter-btn active" data-platform="all">すべて</button>
-          <button class="stream-check-window-filter-btn" data-platform="twitch">Twitch</button>
-          <button class="stream-check-window-filter-btn" data-platform="youtube">YouTube</button>
-          <button class="stream-check-window-filter-btn" data-platform="kick">Kick</button>
-        </div>
-        <div class="stream-check-window-toolbar-right">
-          <span class="stream-check-window-status" id="stream-check-status" role="status"></span>
-          <button type="button" class="stream-check-window-refresh" id="stream-check-refresh-btn">🔄 更新</button>
-          <span class="stream-check-window-updated-at" id="stream-check-updated-at"></span>
-        </div>
+      <!-- フォロー配信者の自動追加（Twitch連携）。旧overlay-panel.jsの縦長ブロックを
+           圧縮し、状態・操作を1行に収めた。詳しい説明はヘルプ側に既存記載があるためここでは
+           繰り返さない（「詳しく」導線は段階C-6で対応予定、現時点は簡潔な注記のみ）。 -->
+      <div class="stream-check-auto-tune-bar" id="stream-check-auto-tune-bar">
+        <span class="stream-check-auto-tune-status-dot" id="stream-check-auto-tune-status-dot"></span>
+        <span class="stream-check-auto-tune-status" id="stream-check-auto-tune-status"></span>
+        <button type="button" class="stream-check-auto-tune-btn" id="stream-check-auto-tune-connect-btn">Twitch連携</button>
+        <button type="button" class="stream-check-auto-tune-btn hidden" id="stream-check-auto-tune-disconnect-btn">連携解除</button>
+        <label class="stream-check-auto-tune-checkbox-row">
+          <input type="checkbox" id="stream-check-auto-tune-enabled-input" disabled />
+          自動追加
+        </label>
+        <label class="stream-check-auto-tune-max-row">
+          上限
+          <input type="number" id="stream-check-auto-tune-max-input" min="1" max="20" value="4" disabled />
+        </label>
+        <span class="stream-check-auto-tune-message" id="stream-check-auto-tune-message"></span>
       </div>
 
-      <main class="stream-check-window-body">
-        <div class="stream-check-card-grid" id="stream-check-card-grid"></div>
-      </main>
+      <!-- 認証画面（BrowserView）がこのウィンドウに重なっている間だけ表示するロック表示。
+           main.jsのopenTwitchAuthView/closeTwitchAuthViewからのauth-view-opened/-closed通知で
+           出し入れする（stream-check-window.js参照）。 -->
+      <div class="stream-check-auth-lock hidden" id="stream-check-auth-lock">
+        <span>Twitchログイン画面を表示中です…</span>
+        <button type="button" id="stream-check-auth-cancel-btn">連携をキャンセル</button>
+      </div>
+
+      <div class="stream-check-tab-group" id="stream-check-tab-group">
+        <button type="button" class="stream-check-tab-btn active" data-tab="live">配信中一覧</button>
+        <button type="button" class="stream-check-tab-btn" data-tab="targets">自動追加の対象</button>
+      </div>
+
+      <div class="stream-check-tab-content" data-tab-content="live">
+        <div class="stream-check-window-toolbar">
+          <div class="stream-check-window-filter-group" id="stream-check-filter-group">
+            <button class="stream-check-window-filter-btn active" data-platform="all">すべて</button>
+            <button class="stream-check-window-filter-btn" data-platform="twitch">Twitch</button>
+            <button class="stream-check-window-filter-btn" data-platform="youtube">YouTube</button>
+            <button class="stream-check-window-filter-btn" data-platform="kick">Kick</button>
+          </div>
+          <div class="stream-check-window-toolbar-right">
+            <span class="stream-check-window-status" id="stream-check-status" role="status"></span>
+            <button type="button" class="stream-check-window-refresh" id="stream-check-refresh-btn">🔄 更新</button>
+            <span class="stream-check-window-updated-at" id="stream-check-updated-at"></span>
+          </div>
+        </div>
+
+        <main class="stream-check-window-body">
+          <div class="stream-check-card-grid" id="stream-check-card-grid"></div>
+        </main>
+      </div>
+
+      <div class="stream-check-tab-content hidden" data-tab-content="targets">
+        <div class="stream-check-window-toolbar">
+          <button type="button" class="stream-check-window-refresh" id="stream-check-targets-load-btn">🔄 全フォロー/登録一覧を読み込む</button>
+          <div class="stream-check-window-filter-group" id="stream-check-targets-sort-group">
+            <button class="stream-check-window-sort-btn active" data-sort="site">サイト別</button>
+            <button class="stream-check-window-sort-btn" data-sort="name">五十音/アルファベット順</button>
+          </div>
+          <div class="stream-check-window-toolbar-right">
+            <span class="stream-check-window-status" id="stream-check-targets-status" role="status"></span>
+          </div>
+        </div>
+        <main class="stream-check-window-body">
+          <div class="stream-check-targets-list" id="stream-check-targets-list"></div>
+        </main>
+      </div>
     </div>
 
     <script src="stream-check-window.js"></script>
