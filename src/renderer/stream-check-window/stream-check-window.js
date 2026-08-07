@@ -28,6 +28,13 @@
 // 20秒間隔を維持する方針にした（両者を別タイマーで独立させる）。
 const UNIFIED_FEED_TWITCH_AUTO_REFRESH_MS = 5 * 1000;
 const UNIFIED_FEED_YOUTUBE_AUTO_REFRESH_MS = 20 * 1000;
+// 段階F追加: Kick分もTwitchと同じ5秒間隔で自動更新する（ユーザー確認済み）。KickはBrowserView
+// フルロードを伴うため元々自動更新の対象外だったが、要望によりTwitch/Kick=5秒・YouTube=20秒に
+// 統一する。負荷が問題になった場合は間隔の見直しが必要になる可能性がある。
+const UNIFIED_FEED_KICK_AUTO_REFRESH_MS = 5 * 1000;
+// 段階F追加: 手動更新ボタンの連打によるレート制限リスクを避けるためのクールダウン
+// （ユーザー確認の上、サイトを問わず一律5秒に設定）。
+const MANUAL_REFRESH_COOLDOWN_MS = 5 * 1000;
 
 // 2026-08-08実機報告対応: 「上からTwitch/YouTube/Kickの順を絶対にする」ため、main.js側の
 // fetchUnifiedFeed()（配信中→視聴者数順のみ）とは別に、このウィンドウの表示直前でのみ
@@ -105,8 +112,12 @@ document.addEventListener('DOMContentLoaded', () => {
   let platformFilter = 'all';
   let unifiedFeedItems = [];
   // 2026-08-08追加（要望⑦）: Twitch分とYouTube分で更新頻度を分けるため、タイマーを2本に分離。
+  // 段階F追加: Kick分も5秒間隔で独立更新するため3本目を追加。
   let twitchAutoTimer = null;
   let youtubeAutoTimer = null;
+  let kickAutoTimer = null;
+  // 段階F追加: 手動更新ボタンのクールダウン管理用。
+  let manualRefreshCooldownTimer = null;
 
   // ---- 段階C追加（2026-08-08）: 自動追加の対象を選ぶ／フォロー配信者の自動追加 ----
   const tabBtns = Array.from(document.querySelectorAll('.stream-check-tab-btn'));
@@ -128,8 +139,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const authLockEl = document.getElementById('stream-check-auth-lock');
   const authCancelBtn = document.getElementById('stream-check-auth-cancel-btn');
 
+  // 段階F追加: 「設定」タブ、追加時にチャットを非表示にするトグル。
+  const settingsChatHiddenOnAddInput = document.getElementById('stream-check-settings-chat-hidden-on-add');
+
   let allFollowCandidates = [];
   let targetsSortMode = 'site'; // 'site' | 'name'
+  // addBtnクリック時に毎回IPCを叩かず済むよう、設定タブの値をローカルにも保持しておく
+  // （init()で復元、トグル変更時に更新）。
+  let addWithChatHiddenDefault = false;
 
   function setStatus(text, isError) {
     statusEl.textContent = text || '';
@@ -287,7 +304,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (offline || item.alreadyAdded) return;
       addBtn.disabled = true;
       try {
-        const result = await window.streamCheckApi.addChannel({ name: item.channel, platform: item.platform });
+        const result = await window.streamCheckApi.addChannel({
+          name: item.channel,
+          platform: item.platform,
+          // 段階F追加: 「設定」タブのトグルがONの場合、追加と同時にチャットを非表示にする
+          // （YouTube/Kickはもともと常時非表示のため実質Twitchのみに効く。main.js addChannel参照）。
+          forceChatHidden: addWithChatHiddenDefault,
+        });
         if (!result || !result.ok) {
           setStatus(`追加に失敗しました: ${result ? result.error : '不明なエラー'}`, true);
           addBtn.disabled = false;
@@ -379,7 +402,11 @@ document.addEventListener('DOMContentLoaded', () => {
       setStatus(`配信一覧の取得に失敗しました: ${String((err && err.message) || err)}`, true);
     } finally {
       loading = false;
-      refreshBtn.disabled = false;
+      // 段階F修正: Twitch/YouTube/Kickの自動更新タイマーはクールダウンを介さず直接load()を
+      // 呼ぶため、手動更新のクールダウン中（manualRefreshCooldownActive）に自動更新が完了すると
+      // ここで無条件にdisabled=falseへ戻してしまい、ボタン表示（残り秒数）と実際に押せる状態が
+      // 食い違うバグがあった。クールダウン中はここでは解除しない。
+      refreshBtn.disabled = manualRefreshCooldownActive;
     }
   }
 
@@ -391,11 +418,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }, 1000);
 
-  // ウィンドウを開いている間、Twitch/YouTube分だけを短い間隔で自動更新する。Kick分はBrowserViewの
-  // フルロードを伴い重いため自動更新の対象からは外し、初回取得・手動更新ボタン押下時のみ取得する
-  // （overlay-panel.jsのstartUnifiedFeedAutoTimer()と同じ方針）。
+  // ウィンドウを開いている間、Twitch/YouTube/Kickをそれぞれ独立した間隔で自動更新する
+  // （overlay-panel.jsのstartUnifiedFeedAutoTimer()と同じ方針から発展）。
   // 2026-08-08変更（要望⑦）: Twitch(公式API、安全)は5秒間隔、YouTube(非公式HTMLスクレイプ、
   // レート制限リスクあり)は従来通り20秒間隔を維持するため、タイマーを2本に分離した。
+  // 段階F変更: Kick分もTwitch同様5秒間隔で自動更新するよう追加（ユーザー確認済み、
+  // UNIFIED_FEED_KICK_AUTO_REFRESH_MS参照）。KickはBrowserViewフルロードを伴うため、
+  // 負荷が問題になる場合は間隔の見直しが必要になる可能性がある。
   function startAutoTimer() {
     stopAutoTimer();
     twitchAutoTimer = setInterval(
@@ -405,6 +434,10 @@ document.addEventListener('DOMContentLoaded', () => {
     youtubeAutoTimer = setInterval(
       () => load({ includeKick: false, includeTwitch: false }),
       UNIFIED_FEED_YOUTUBE_AUTO_REFRESH_MS
+    );
+    kickAutoTimer = setInterval(
+      () => load({ includeTwitch: false, includeYoutube: false }),
+      UNIFIED_FEED_KICK_AUTO_REFRESH_MS
     );
   }
   function stopAutoTimer() {
@@ -416,14 +449,50 @@ document.addEventListener('DOMContentLoaded', () => {
       clearInterval(youtubeAutoTimer);
       youtubeAutoTimer = null;
     }
+    if (kickAutoTimer) {
+      clearInterval(kickAutoTimer);
+      kickAutoTimer = null;
+    }
   }
 
   window.addEventListener('beforeunload', () => {
     clearInterval(elapsedTimer);
     stopAutoTimer();
+    clearInterval(manualRefreshCooldownTimer);
   });
 
-  refreshBtn.addEventListener('click', () => load());
+  // 段階F追加: 手動更新ボタンの連打防止クールダウン（5秒、MANUAL_REFRESH_COOLDOWN_MS参照）。
+  // クールダウン中はボタンを無効化し、残り秒数をボタン表示に出す。
+  // manualRefreshCooldownActiveは、自動更新タイマー由来のload()がクールダウン中に完了して
+  // finally句で誤ってdisabledを解除してしまわないようload()側から参照するためのフラグ
+  // （load()のfinally句参照）。
+  let manualRefreshCooldownActive = false;
+  const refreshBtnDefaultLabel = refreshBtn.textContent;
+  function startManualRefreshCooldown() {
+    clearInterval(manualRefreshCooldownTimer);
+    let remainingMs = MANUAL_REFRESH_COOLDOWN_MS;
+    manualRefreshCooldownActive = true;
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = `🔄 更新 (${Math.ceil(remainingMs / 1000)}s)`;
+    manualRefreshCooldownTimer = setInterval(() => {
+      remainingMs -= 1000;
+      if (remainingMs <= 0) {
+        clearInterval(manualRefreshCooldownTimer);
+        manualRefreshCooldownTimer = null;
+        manualRefreshCooldownActive = false;
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = refreshBtnDefaultLabel;
+      } else {
+        refreshBtn.textContent = `🔄 更新 (${Math.ceil(remainingMs / 1000)}s)`;
+      }
+    }, 1000);
+  }
+
+  refreshBtn.addEventListener('click', async () => {
+    if (refreshBtn.disabled) return; // クールダウン中
+    await load();
+    startManualRefreshCooldown();
+  });
   // ESCキー・OSの閉じるボタンはmain.js側（before-input-event / ウィンドウ標準の閉じるボタン）で
   // 処理される。こちらはヘッダーの×ボタン専用。
   closeBtn.addEventListener('click', () => window.streamCheckApi.closeWindow());
@@ -689,6 +758,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // ---- 段階F: 設定タブ「追加時にチャットを非表示にする」 ----
+  settingsChatHiddenOnAddInput.addEventListener('change', async () => {
+    addWithChatHiddenDefault = settingsChatHiddenOnAddInput.checked;
+    await window.streamCheckApi.setAddChatHiddenDefault(addWithChatHiddenDefault);
+  });
+
   // ---- 初期化 ----
   (async function init() {
     try {
@@ -696,6 +771,12 @@ document.addEventListener('DOMContentLoaded', () => {
       setPlatformFilter(filter || 'all', false);
     } catch (_) {
       setPlatformFilter('all', false);
+    }
+    try {
+      addWithChatHiddenDefault = await window.streamCheckApi.getAddChatHiddenDefault();
+      settingsChatHiddenOnAddInput.checked = addWithChatHiddenDefault;
+    } catch (_) {
+      addWithChatHiddenDefault = false;
     }
     await load();
     startAutoTimer();

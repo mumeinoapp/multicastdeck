@@ -1601,8 +1601,13 @@ function setChatIntegrationMode(mode, persist = true) {
   chatIntegrationSendRow.classList.toggle('hidden', mode !== 'timeline');
   // タブモードから戻ってきた際、実際のスクロール位置と無関係にボタンが表示されたまま
   // 残ることがあるため、timelineモードに入るたびに現在位置で判定し直す。
+  // 段階F追加: 併せてchatTimelineFollowBottom（自動追従状態）もこの時点の実際の位置で
+  // 同期しておく（不整合があると、切替直後の1通目でappendTimelineMessage側の追従判定が
+  // 実際のスクロール位置と食い違ってしまうため）。
   if (mode === 'timeline') {
-    chatIntegrationJumpBottomBtn.classList.toggle('hidden', isChatTimelineNearBottom());
+    const nearBottom = isChatTimelineNearBottom();
+    chatIntegrationJumpBottomBtn.classList.toggle('hidden', nearBottom);
+    chatTimelineFollowBottom = nearBottom;
   }
   // #8対応: 再起動後も選択中のモードを維持できるよう永続化する。
   if (persist) window.api.setAllSettings({ chatIntegrationMode: mode });
@@ -1624,16 +1629,39 @@ function isChatTimelineNearBottom() {
   );
 }
 
+// 段階F追加: 「自動追従（最新チャットに追いつき続ける）」の意図を明示的な状態として保持する。
+// 元々は毎回scrollHeight等から都度計算していたが、絵文字・クリップサムネイル用<img>が
+// メッセージ追加後に非同期で読み込まれて行の高さが変わると、スクロール位置とscrollHeightの
+// ずれがCHAT_TIMELINE_BOTTOM_THRESHOLDを超えてしまい、ユーザーが一切操作していないのに
+// 「自動追従が効かなくなる」不具合があった。プログラム側でscrollTopを書き換えた直後の
+// scrollイベントで誤って「追従OFF」と判定しないよう、isAutoScrollingChatTimelineで区別する。
+let chatTimelineFollowBottom = true;
+let isAutoScrollingChatTimeline = false;
+
 /** タイムラインを最下部（最新のチャット表示位置）まで即座にスクロールし、ジャンプボタンを隠す */
 function scrollChatTimelineToBottom() {
+  isAutoScrollingChatTimeline = true;
   chatIntegrationTimeline.scrollTop = chatIntegrationTimeline.scrollHeight;
+  chatTimelineFollowBottom = true;
   chatIntegrationJumpBottomBtn.classList.add('hidden');
+  // scrollイベントはブラウザによって非同期に発火するため、次のタスクまでプログラム操作中の
+  // フラグを立てておき、その間にscrollハンドラが「ユーザーが上にスクロールした」と誤判定
+  // しないようにする。
+  setTimeout(() => {
+    isAutoScrollingChatTimeline = false;
+  }, 0);
 }
 
 // スクロール位置が一番下ではなく少しでも上になっている場合は「↓ 最新へ」ボタンを表示し、
 // クリックひとつで最新のチャット表示位置（一番下）まで戻れるようにする。
+// プログラム側の自動スクロール中(isAutoScrollingChatTimeline)はユーザー操作ではないため、
+// chatTimelineFollowBottomの状態自体は変更しない（ボタン表示の即時反映だけ行う）。
 chatIntegrationTimeline.addEventListener('scroll', () => {
-  chatIntegrationJumpBottomBtn.classList.toggle('hidden', isChatTimelineNearBottom());
+  const nearBottom = isChatTimelineNearBottom();
+  chatIntegrationJumpBottomBtn.classList.toggle('hidden', nearBottom);
+  if (!isAutoScrollingChatTimeline) {
+    chatTimelineFollowBottom = nearBottom;
+  }
 });
 chatIntegrationJumpBottomBtn.addEventListener('click', scrollChatTimelineToBottom);
 
@@ -2121,6 +2149,21 @@ function hydrateClipCards(line) {
             thumbWrap.innerHTML = `<img class="chat-clip-thumb" src="${escapeHtml(
               src
             )}" alt="${escapeHtml(info.title || 'クリップ')}" onerror="this.remove();">`;
+            // 段階F追加: このサムネイル画像も追加からタイムラグを置いて非同期に読み込まれ、行の
+            // 高さを変えるため、appendTimelineMessage側と同じく読み込み完了時に追従中であれば
+            // 最下部へ再スナップする（自動追従が徐々に効かなくなる不具合の対策、詳細は
+            // appendTimelineMessage側のコメント参照）。
+            const thumbImg = thumbWrap.querySelector('img');
+            if (thumbImg) {
+              const resnap = () => {
+                if (chatTimelineFollowBottom) scrollChatTimelineToBottom();
+              };
+              if (thumbImg.complete) resnap();
+              else {
+                thumbImg.addEventListener('load', resnap, { once: true });
+                thumbImg.addEventListener('error', resnap, { once: true });
+              }
+            }
           }
         }
         if (info.title) {
@@ -2149,10 +2192,10 @@ function isChannelHiddenFromChatIntegration(channel) {
 
 function appendTimelineMessage({ channel, username, message, color, emotesTag, platform }) {
   if (isChannelHiddenFromChatIntegration(channel)) return;
-  // 追加前の時点でのスクロール位置を見て、最下部付近にいたかどうかを判定する
-  // （最下部にいた場合のみ新着メッセージに追従し、少しでも上にスクロールして過去ログを
-  // 読んでいる場合は追従させず「↓ 最新へ」ボタン側に誘導する）。
-  const wasNearBottom = isChatTimelineNearBottom();
+  // 追加前の時点で「自動追従」中だったかどうかを見る（chatTimelineFollowBottom、スクロール
+  // イベントハンドラで維持している状態）。最下部にいた場合のみ新着メッセージに追従し、
+  // 少しでも上にスクロールして過去ログを読んでいる場合は追従させず「↓ 最新へ」ボタン側に誘導する。
+  const wasFollowingBottom = chatTimelineFollowBottom;
   const line = document.createElement('div');
   line.className = 'chat-line';
   const messageHtml =
@@ -2165,8 +2208,23 @@ function appendTimelineMessage({ channel, username, message, color, emotesTag, p
   while (chatIntegrationTimeline.children.length > CHAT_TIMELINE_MAX_LINES) {
     chatIntegrationTimeline.removeChild(chatIntegrationTimeline.firstChild);
   }
-  if (wasNearBottom) {
-    chatIntegrationTimeline.scrollTop = chatIntegrationTimeline.scrollHeight;
+  if (wasFollowingBottom) {
+    scrollChatTimelineToBottom();
+    // 段階F追加: 絵文字・クリップサムネイル用の<img>は非同期に読み込まれ、読み込み完了後に
+    // この行の高さが変わることがある（クリップのサムネイルはhydrateClipCards側で後から
+    // innerHTMLごと差し替わる）。追従中に高さが変わった分だけ最下部の位置がずれるため、
+    // 読み込み完了のたびに「まだ追従中であれば」再度最下部へスナップし直す。
+    line.querySelectorAll('img').forEach((img) => {
+      const resnap = () => {
+        if (chatTimelineFollowBottom) scrollChatTimelineToBottom();
+      };
+      if (img.complete) {
+        resnap();
+      } else {
+        img.addEventListener('load', resnap, { once: true });
+        img.addEventListener('error', resnap, { once: true });
+      }
+    });
   } else {
     chatIntegrationJumpBottomBtn.classList.remove('hidden');
   }

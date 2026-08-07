@@ -29,6 +29,12 @@
   （#stream-check-auto-tune-bar）に、対象を選ぶ機能は新設タブ「自動追加の対象」
   （#stream-check-targets-tab-content）にそれぞれ配置。既存の「配信中一覧」タブは
   段階Bの内容をそのまま`data-tab-content="live"`でラップしただけで中身は無改造。
+
+  2026-08-08 段階F追加: ヘッダー（配信一覧／×欄）の上下paddingを詰めて空白を縮小。
+  「自動追加の対象」タブを「自動追加」に改称し、ヘッダー直下にあった
+  #stream-check-auto-tune-barを本タブのツールバー右側へ統合（id・中身のJSロジックは不変、
+  親要素のみ移動）。チェックボックスの使い方説明を<details>で追加。新設「設定」タブに
+  「追加時にチャットを非表示にする」トグルを追加した。
 -->
 <html lang="ja">
   <head>
@@ -52,27 +58,6 @@
         </div>
       </header>
 
-      <!-- フォロー配信者の自動追加（Twitch連携）。旧overlay-panel.jsの縦長ブロックを
-           圧縮し、状態・操作を1行に収めた。詳しい説明はヘルプ(Twitchタブ)へ移設済み
-           （段階E、2026-08-08）。「詳しく」ボタンはstream-check-window-preload.jsの
-           openHelpSection経由でメインウィンドウのヘルプをTwitchタブ・該当項目へ直接開く。 -->
-      <div class="stream-check-auto-tune-bar" id="stream-check-auto-tune-bar">
-        <span class="stream-check-auto-tune-status-dot" id="stream-check-auto-tune-status-dot"></span>
-        <span class="stream-check-auto-tune-status" id="stream-check-auto-tune-status"></span>
-        <button type="button" class="stream-check-auto-tune-btn" id="stream-check-auto-tune-connect-btn">Twitch連携</button>
-        <button type="button" class="stream-check-auto-tune-btn hidden" id="stream-check-auto-tune-disconnect-btn">連携解除</button>
-        <label class="stream-check-auto-tune-checkbox-row">
-          <input type="checkbox" id="stream-check-auto-tune-enabled-input" disabled />
-          自動追加
-        </label>
-        <label class="stream-check-auto-tune-max-row">
-          上限
-          <input type="number" id="stream-check-auto-tune-max-input" min="1" max="20" value="4" disabled />
-        </label>
-        <button type="button" class="stream-check-auto-tune-help-link" id="stream-check-auto-tune-help-btn">詳しく</button>
-        <span class="stream-check-auto-tune-message" id="stream-check-auto-tune-message"></span>
-      </div>
-
       <!-- 認証画面（BrowserView）がこのウィンドウに重なっている間だけ表示するロック表示。
            main.jsのopenTwitchAuthView/closeTwitchAuthViewからのauth-view-opened/-closed通知で
            出し入れする（stream-check-window.js参照）。 -->
@@ -83,7 +68,8 @@
 
       <div class="stream-check-tab-group" id="stream-check-tab-group">
         <button type="button" class="stream-check-tab-btn active" data-tab="live">配信中一覧</button>
-        <button type="button" class="stream-check-tab-btn" data-tab="targets">自動追加の対象</button>
+        <button type="button" class="stream-check-tab-btn" data-tab="targets">自動追加</button>
+        <button type="button" class="stream-check-tab-btn" data-tab="settings">設定</button>
       </div>
 
       <div class="stream-check-tab-content" data-tab-content="live">
@@ -115,10 +101,59 @@
           </div>
           <div class="stream-check-window-toolbar-right">
             <span class="stream-check-window-status" id="stream-check-targets-status" role="status"></span>
+            <!-- 段階F: 元はヘッダー直下の独立行だった「フォロー配信者の自動追加（Twitch連携）」
+                 バーを、場所を取りすぎるとの指摘によりこのツールバー右側へ統合した。
+                 中身の要素・id・JSロジックは変更していない（レイアウト上の親を移しただけ）。 -->
+            <div class="stream-check-auto-tune-bar" id="stream-check-auto-tune-bar">
+              <span class="stream-check-auto-tune-status-dot" id="stream-check-auto-tune-status-dot"></span>
+              <span class="stream-check-auto-tune-status" id="stream-check-auto-tune-status"></span>
+              <button type="button" class="stream-check-auto-tune-btn" id="stream-check-auto-tune-connect-btn">Twitch連携</button>
+              <button type="button" class="stream-check-auto-tune-btn hidden" id="stream-check-auto-tune-disconnect-btn">連携解除</button>
+              <label class="stream-check-auto-tune-checkbox-row">
+                <input type="checkbox" id="stream-check-auto-tune-enabled-input" disabled />
+                自動追加
+              </label>
+              <label class="stream-check-auto-tune-max-row">
+                上限
+                <input type="number" id="stream-check-auto-tune-max-input" min="1" max="20" value="4" disabled />
+              </label>
+              <button type="button" class="stream-check-auto-tune-help-link" id="stream-check-auto-tune-help-btn">詳しく</button>
+              <span class="stream-check-auto-tune-message" id="stream-check-auto-tune-message"></span>
+            </div>
           </div>
         </div>
+
+        <!-- 段階F追加: チェックボックスの意味が分かりにくいとの指摘を受け、詳しい説明を追加。
+             常時全文表示すると再び縦に場所を取ってしまうため、<details>で折りたたみ式にした
+             （初期状態は閉じており、必要な人だけ開く）。 -->
+        <details class="stream-check-targets-help">
+          <summary>チェックボックスの使い方（クリックで開く）</summary>
+          <ul>
+            <li><strong>左端のチェック（対象にする）</strong>: チェックした配信者だけが「自動追加」機能の対象になります。Twitch/YouTubeのみ対象で、YouTubeは特にこのチェックを付けないと自動追加されません（Kickは自動追加非対応です）。</li>
+            <li><strong>ピン留めチェック（YouTubeのみ）</strong>: チェックすると、配信中/オフラインを問わず「配信中一覧」タブに常時表示され続けます。自分でチェックを外すまで表示されたままになります。</li>
+            <li><strong>右上の「自動追加」チェックと「上限」入力</strong>: Twitchアカウント連携が完了している場合のみ操作できます。ONにすると、上限に達するまで対象チェックを付けた配信者の配信開始を自動検知してタイルに追加します。</li>
+          </ul>
+        </details>
+
         <main class="stream-check-window-body">
           <div class="stream-check-targets-list" id="stream-check-targets-list"></div>
+        </main>
+      </div>
+
+      <div class="stream-check-tab-content hidden" data-tab-content="settings">
+        <main class="stream-check-window-body">
+          <div class="stream-check-settings-section">
+            <label class="stream-check-settings-toggle-row">
+              <input type="checkbox" id="stream-check-settings-chat-hidden-on-add" />
+              <span class="stream-check-settings-toggle-label">
+                配信一覧から追加するときは埋め込みチャットを非表示にする
+              </span>
+            </label>
+            <p class="stream-check-settings-note">
+              ONにすると、この配信一覧ウィンドウの「＋追加」ボタンで配信を追加した際、埋め込みチャットが
+              非表示の状態で追加されます（あとからいつでもチャンネルごとに切り替えられます）。
+            </p>
+          </div>
         </main>
       </div>
     </div>

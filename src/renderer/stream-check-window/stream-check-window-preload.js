@@ -58,4 +58,8 @@ contextBridge.exposeInMainWorld('streamCheckApi', {
   // 段階E追加: 圧縮バーの「詳しく」導線用。メインウィンドウを前面に出し、ヘルプの指定タブ・
   // 指定項目まで開く（main.js ui:open-help-section参照）。
   openHelpSection: (tab, anchor) => ipcRenderer.invoke('ui:open-help-section', tab, anchor),
+
+  // 段階F追加: 「設定」タブ、追加時にチャットを非表示にするトグルの永続化。
+  getAddChatHiddenDefault: () => ipcRenderer.invoke('stream-check-window:get-add-chat-hidden-default'),
+  setAddChatHiddenDefault: (value) => ipcRenderer.invoke('stream-check-window:set-add-chat-hidden-default', value),
 });

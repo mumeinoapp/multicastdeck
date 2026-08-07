@@ -128,6 +128,13 @@ const store = new Store({
     // 統一フィード（フォロー中で現在配信中のチャンネル一覧）のプラットフォーム絞り込み
     // （'all'|'twitch'|'youtube'|'kick'）。#8対応: 同様に以前は永続化されていなかった。
     unifiedFeedPlatformFilter: 'all',
+    // 段階F追加: 配信一覧ウィンドウのサイズ・位置（閉じても記憶する）。
+    // null | { x, y, width, height }
+    streamCheckWindowBounds: null,
+    // 段階F追加: 配信一覧ウィンドウの「設定」タブ、「追加するときは埋め込みチャットを
+    // 非表示にする」トグルの状態。ONの場合、配信一覧から「＋追加」した配信（Twitchのみ対象。
+    // YouTube/Kickはもともと常時チャット非表示のため対象外）はチャット非表示の状態で追加される。
+    streamCheckAddWithChatHiddenDefault: false,
   },
 });
 
@@ -1237,6 +1244,33 @@ function showContentViewsForOverlay() {
   notifyRenderer('tile:bars-visible', true);
 }
 
+/**
+ * 段階F追加（要望⑪）: 「最前面に表示される属性を持つもの全てに共通で、アクティブになった
+ * ウィンドウは他のウィンドウの上に表示されるようにする」対応。
+ *
+ * このアプリのトップレベルBrowserWindowはmainWindow・layoutWindow（alwaysOnTop:true）・
+ * streamCheckWindow（parent: mainWindow）の3つ。特にstreamCheckWindowの「詳しく」ボタン等から
+ * ui:open-help-sectionでmainWindow.focus()を呼ぶと、Electron/Windowsの実装上、親であるはずの
+ * mainWindowがOwned Window（子）のstreamCheckWindowより前面に出てしまうケースが実機で確認された
+ * （子は親より常に前面、という仕様が常に厳密に保たれるとは限らない）。
+ * setAlwaysOnTop(true)を使うとOS全体の最前面固定になってしまい別の実機報告済みバグを再発させる
+ * ため（createStreamCheckWindow()のコメント参照）、代わりにwin.moveTop()（Electronウィンドウ間の
+ * みでz-orderを最前面へ動かす、OS全体には影響しない）を、そのウィンドウがフォーカスを得た瞬間に
+ * 呼び出す。これにより「直近にアクティブになったウィンドウが他のMCDウィンドウより前に出る」を
+ * 対象ウィンドウが増えても共通の仕組みで保証できる。
+ * @param {import('electron').BrowserWindow} win
+ */
+function bringWindowToFrontOnFocus(win) {
+  win.on('focus', () => {
+    if (win.isDestroyed()) return;
+    try {
+      win.moveTop();
+    } catch (_) {
+      /* 極めて稀なタイミング（フォーカス直後に閉じられた等）でのエラーは無視 */
+    }
+  });
+}
+
 function createMainWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
@@ -1264,6 +1298,8 @@ function createMainWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  bringWindowToFrontOnFocus(mainWindow);
 
   mainWindow.on('resize', () => {
     relayoutStreamViews();
@@ -1353,6 +1389,8 @@ function createLayoutWindow() {
   layoutWindow.setMenuBarVisibility(false);
   layoutWindow.loadFile(path.join(__dirname, 'renderer', 'layout-window', 'index.html'));
 
+  bringWindowToFrontOnFocus(layoutWindow);
+
   layoutWindow.once('ready-to-show', () => {
     if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.show();
   });
@@ -1404,9 +1442,31 @@ function createStreamCheckWindow() {
     return streamCheckWindow;
   }
 
+  // 段階F追加: 前回閉じた時のサイズ・位置を復元する。保存値がどのディスプレイの作業領域とも
+  // 全く重ならない場合（外部モニタを外した後など）は既定値にフォールバックする。
+  const savedBounds = store.get('streamCheckWindowBounds');
+  let initialBounds = { width: 900, height: 700 };
+  if (
+    savedBounds &&
+    Number.isFinite(savedBounds.x) &&
+    Number.isFinite(savedBounds.y) &&
+    Number.isFinite(savedBounds.width) &&
+    Number.isFinite(savedBounds.height)
+  ) {
+    const fitsAnyDisplay = screen.getAllDisplays().some((d) => {
+      const wa = d.workArea;
+      return (
+        savedBounds.x < wa.x + wa.width &&
+        savedBounds.x + savedBounds.width > wa.x &&
+        savedBounds.y < wa.y + wa.height &&
+        savedBounds.y + savedBounds.height > wa.y
+      );
+    });
+    if (fitsAnyDisplay) initialBounds = savedBounds;
+  }
+
   streamCheckWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
+    ...initialBounds,
     minWidth: 480,
     minHeight: 360,
     title: '配信一覧',
@@ -1425,6 +1485,8 @@ function createStreamCheckWindow() {
   streamCheckWindow.setMenuBarVisibility(false);
   streamCheckWindow.loadFile(path.join(__dirname, 'renderer', 'stream-check-window', 'index.html'));
 
+  bringWindowToFrontOnFocus(streamCheckWindow);
+
   streamCheckWindow.once('ready-to-show', () => {
     if (streamCheckWindow && !streamCheckWindow.isDestroyed()) streamCheckWindow.show();
   });
@@ -1441,6 +1503,28 @@ function createStreamCheckWindow() {
   // 認証画面ごと確実に破棄する（孤立防止）。
   streamCheckWindow.on('resize', () => {
     if (twitchAuthHostWindow === streamCheckWindow) relayoutTwitchAuthView();
+  });
+
+  // 段階F追加: サイズ・位置を記憶し、閉じても次回開いた時に復元する。リサイズ/移動のたびに
+  // 保存すると頻度が高すぎるためdebounceし、実際に閉じる直前（close、まだ破棄前）にも
+  // 最終値を必ず保存しておく。
+  let boundsSaveTimer = null;
+  const scheduleSaveStreamCheckBounds = () => {
+    if (!streamCheckWindow || streamCheckWindow.isDestroyed()) return;
+    clearTimeout(boundsSaveTimer);
+    boundsSaveTimer = setTimeout(() => {
+      if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {
+        store.set('streamCheckWindowBounds', streamCheckWindow.getBounds());
+      }
+    }, 300);
+  };
+  streamCheckWindow.on('resize', scheduleSaveStreamCheckBounds);
+  streamCheckWindow.on('move', scheduleSaveStreamCheckBounds);
+  streamCheckWindow.on('close', () => {
+    clearTimeout(boundsSaveTimer);
+    if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {
+      store.set('streamCheckWindowBounds', streamCheckWindow.getBounds());
+    }
   });
 
   streamCheckWindow.on('closed', () => {
@@ -1548,6 +1632,10 @@ function addChannel(channelName, opts = {}) {
     // 動画URL（watch?v=等）を直接貼り付けた場合の動画ID。指定があればライブ検索を経由せず
     // そのままその動画を埋め込む（resolveYoutubeChannelIdのvideo判定・parseYoutubeInput参照）。
     youtubeVideoId = null,
+    // 段階F追加: 配信一覧ウィンドウの設定タブ「追加時にチャットを非表示にする」トグルがONの
+    // 場合にtrueで渡される。YouTube/Kickはこの指定がなくても常時非表示固定（下記の既存分岐）
+    // のため、実質Twitch追加時のみ意味を持つ。
+    forceChatHidden = false,
   } = opts;
   if (streamViews.has(channelName)) return;
 
@@ -1574,7 +1662,9 @@ function addChannel(channelName, opts = {}) {
   // YouTube/Kickチャンネルは今回のスコープでは常にチャット非表示（既存の「チャット表示しない」機構を流用）。
   // Kickはチャット統合・スタンプ等は今回のスコープ外（視聴＋アカウント連携のみ）のため、Twitch公式埋め込み
   // チャットのような統合先が無く、常時非表示固定にする。
-  if (platform === 'youtube' || platform === 'kick') {
+  // 段階F追加: forceChatHidden指定時はTwitchでも同じ「チャット非表示」マップを使って非表示状態で追加する
+  // （あとからチップの💬/🔇アイコンでいつでも個別に変更可能、既存の仕組みをそのまま流用しているだけ）。
+  if (platform === 'youtube' || platform === 'kick' || forceChatHidden) {
     const chatHiddenMap = store.get('chatHidden');
     chatHiddenMap[channelName] = true;
     store.set('chatHidden', chatHiddenMap);
@@ -5537,7 +5627,8 @@ function hasYoutubeChannel(handle) {
 
 // 第2引数は文字列（チャンネル名のみ、Twitch扱い＝後方互換）または { name, platform } のどちらも受け付ける
 ipcMain.handle('channels:add', async (_e, payload) => {
-  const { name, platform } = typeof payload === 'string' ? { name: payload, platform: 'twitch' } : payload || {};
+  const { name, platform, forceChatHidden } =
+    typeof payload === 'string' ? { name: payload, platform: 'twitch' } : payload || {};
   const trimmed = String(name || '').trim();
   if (!trimmed) return { ok: false, error: 'チャンネル名を入力してください' };
 
@@ -5574,7 +5665,7 @@ ipcMain.handle('channels:add', async (_e, payload) => {
     return { ok: true };
   }
 
-  addChannel(trimmed);
+  addChannel(trimmed, { forceChatHidden: !!forceChatHidden });
   notifyRenderer('channels:changed');
   return { ok: true };
 });
@@ -5587,6 +5678,10 @@ ipcMain.handle('channels:remove', (_e, channelName) => {
     stopZapping();
   } else {
     removeChannel(channelName);
+    // 配信一覧ウィンドウ等の別ウィンドウから削除された場合にメインウィンドウの
+    // チップ表示（refreshChips）が追従しないバグ対策。stopZapping()側は既に
+    // 通知しているためここでは通常削除の分岐のみ通知する。
+    notifyRenderer('channels:changed');
   }
   return Array.from(streamViews.keys());
 });
@@ -6383,6 +6478,15 @@ ipcMain.handle('unified-feed:get-platform-filter', () => store.get('unifiedFeedP
 ipcMain.handle('unified-feed:set-platform-filter', (_e, filter) => {
   const allowed = ['all', 'twitch', 'youtube', 'kick'];
   store.set('unifiedFeedPlatformFilter', allowed.includes(filter) ? filter : 'all');
+  return true;
+});
+
+// 段階F追加: 配信一覧ウィンドウ「設定」タブの「追加時にチャットを非表示にする」トグル。
+ipcMain.handle('stream-check-window:get-add-chat-hidden-default', () => {
+  return !!store.get('streamCheckAddWithChatHiddenDefault');
+});
+ipcMain.handle('stream-check-window:set-add-chat-hidden-default', (_e, value) => {
+  store.set('streamCheckAddWithChatHiddenDefault', !!value);
   return true;
 });
 
