@@ -165,12 +165,30 @@
     `computeMainSubRects`を新設し、既存の`layout-share`(applySharedLayout)のチャンネル適用
     パターンを踏襲する方針（段階3）。
     → **段階1「独立ウィンドウ土台＋グリッド表示」実装・独立レビューPASS済み、git commit f8b67e4。**
-    **段階2「クリック選択・取消とMAIN/SUB自動整列ロジック」も実装済み**（src/renderer/
-    layout-window/layout-window.js・layout-window.css）。MAIN/SUB1/SUB2/SUB3の最大4枠、
-    クリックした順に選択（自動整列バッジ表示）、選択済みカード再クリックで解除（splice()に
-    よる自動繰り上がり）、配信終了等で一覧から消えたチャンネルの選択も自動的に外す処理を実装。
-    残り: 段階3(メイン画面タイル配置への実際の反映)/段階4(デザイン仕上げ・エッジケース対応)。
-    実機での動作確認はまだ未実施。
+    **段階2「クリック選択・取消」も実装済み**（git commit 2628a2e）。
+
+    ⚠️**段階3着手時にユーザーと再相談し、仕様を以下の通り更新（MAIN/SUB案は廃止）**:
+    「MAIN/SUB1〜3固定4枠」ではなく、選択数(1〜9)に応じた専用テンプレート配置に変更。
+    1枚=全画面／2枚=左右2分割／3枚=上1(全幅)+下3分割／4枚=四方2x2／5枚=上2分割+下3分割／
+    6枚=上3分割+下3分割／7枚=上(2x2の4枠)+下3分割／8枚=上3分割+中3分割+下2分割(少し小さめ)／
+    9枚=3x3。さらに、この1〜9テンプレートは今回の新機能専用ではなく、既存の「自動整列」ボタン
+    （現在開いている全タイルを均等グリッドにする機能）の中身自体も全面置き換えてよいとユーザー
+    承認済み。トリガーも「適用」ボタンではなく、レイアウト設定ウィンドウ内に新設する
+    「自動整列」ボタンに統一。加えて2つのオプションを追加：①「クリックで即時追加」トグル
+    （ONの間は選択と同時にメイン画面へその場でチャンネル追加、既存のchannels:add IPCを再利用）
+    ②「チャット表示」トグル（自動整列実行時に選択チャンネル全体の個別チャット埋め込みを一括
+    ON/OFF、Twitchのみ意味を持つ）。未選択タイルを閉じる完全入れ替え自体は元の確認事項⑦通り
+    確認ポップアップなしで実行してよいとユーザー確認済み。
+
+    → **段階3実装済み（レビュー前）**: main.jsに`computeTemplateRects(count)`（1〜9枚テンプレート、
+    10枚超は既存computeAutoGridRectsへフォールバック）を新設し、`autoArrangeAllTiles()`
+    （既存の自動整列ボタン）の中身をこれに置換。新規`applyLayoutWindowArrange({selection,
+    chatVisible})`（既存タイル全閉じ→選択順にaddChannel→チャット一括設定→
+    computeTemplateRectsでtileLayouts設定→channelOrder設定→relayoutStreamViews）と
+    IPCハンドラ`layout-window:auto-arrange`を追加。layout-window-preload.jsに`addChannel`
+    （既存channels:add再利用）・`autoArrange`を追加。layout-window.js/css/index.htmlに
+    「自動整列」ボタン・2トグルのUIとロジックを追加、SLOT_LABELSはMAIN/SUB1〜3から1〜9の
+    番号バッジに変更。次は独立レビュー→実機確認。
 
 ## UIデザインについて（ユーザーからの補足）
 

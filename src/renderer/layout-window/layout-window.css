@@ -92,6 +92,58 @@ body {
   color: #fff;
 }
 
+/* ---- ツールバー（段階3追加: クリック即時追加/チャット表示トグル・自動整列ボタン） ---- */
+.layout-window-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 10px 16px;
+  background: #1f1f23;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.layout-window-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #d4d4d8;
+  cursor: pointer;
+  user-select: none;
+}
+
+.layout-window-toggle input[type='checkbox'] {
+  accent-color: #4f8cff;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.layout-window-auto-arrange {
+  appearance: none;
+  border: none;
+  margin-left: auto;
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0b0b0d;
+  background: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%);
+  cursor: pointer;
+}
+
+.layout-window-auto-arrange:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.layout-window-auto-arrange:disabled {
+  opacity: 0.4;
+  cursor: default;
+  filter: none;
+}
+
 /* ---- ステータス行（読み込み中・エラー・件数） ---- */
 .layout-window-status {
   flex-shrink: 0;

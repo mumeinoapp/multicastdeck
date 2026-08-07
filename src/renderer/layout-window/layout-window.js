@@ -1,17 +1,23 @@
 'use strict';
 
-// 複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階／2026-08-08第2段階でクリック選択追加）の描画ロジック。
+// 複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階／第2段階でクリック選択追加／
+// 第3段階でメイン画面への反映を追加）の描画ロジック。
 //
 // 第1段階のスコープは「開くと現在配信中のチャンネル一覧がカードのグリッドで並ぶ（見るだけ）」まで。
-// 第2段階として、配信者アイコンをクリックした順にMAIN→SUB1→SUB2→SUB3へ自動整列で選択し、
-// 選択済みカードを再クリックすると選択解除（自動整列＝残りの選択が詰めて繰り上がる）できる
-// ロジックを追加した。メイン画面の実際の配信タイル配置への反映（元依頼一覧item20の段階3）は
-// まだ対象外で、このウィンドウ内の選択状態を持つだけ。
+// 第2段階として、配信者アイコンをクリックした順に選択し（最大9件）、選択済みカードを再クリックすると
+// 選択解除（自動整列＝残りの選択が詰めて繰り上がる）できるロジックを追加した。
+// 第3段階として、ユーザーとの追加相談の結果、当初案の「MAIN/SUB1〜3固定4枠」は廃止し、
+// 選択順に応じた1〜9枚の見栄え重視テンプレート（main.js側computeTemplateRects、既存の
+// 「自動整列」機能の中身も同じテンプレートに統一済み）へ一本化した。このウィンドウの「自動整列」
+// ボタンを押すと、選択内容でメイン画面の全タイルを完全に置き換える（未選択の既存タイルは閉じる）。
+// 加えて「クリックで即時追加」トグル（ONの間は選択と同時にメイン画面へその場でチャンネルを追加、
+// 既存の手動追加と同じchannels:add IPCを再利用）と、「チャット表示」トグル（自動整列実行時に
+// 選択チャンネル全体の個別チャット埋め込み表示を一括ON/OFF、Twitchのみ意味を持つ）を追加した。
 // データ取得は既存の unified-feed（main.jsのfetchUnifiedFeed）をそのまま再利用しており、
 // 既存の配信チェックパネル側のコードには一切手を加えていない（完全に独立した新規コードパス）。
 
-// MAIN + SUB1〜3 の最大4枠（元依頼一覧item20のスクリーンショット仕様に合わせる）。
-const SLOT_LABELS = ['MAIN', 'SUB1', 'SUB2', 'SUB3'];
+// 選択順の番号バッジ（最大9件、元依頼一覧item20のスクリーンショット仕様＝1〜9枚テンプレートに合わせる）。
+const SLOT_LABELS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
 const MAX_SLOTS = SLOT_LABELS.length;
 
 // アバター画像が無い／読み込み失敗した時のフォールバック（overlay-panel.js と同じ図柄）。
@@ -53,12 +59,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusEl = document.getElementById('layout-status');
   const refreshBtn = document.getElementById('layout-refresh-btn');
   const closeBtn = document.getElementById('layout-close-btn');
+  const immediateAddToggle = document.getElementById('layout-immediate-add-toggle');
+  const chatVisibleToggle = document.getElementById('layout-chat-visible-toggle');
+  const autoArrangeBtn = document.getElementById('layout-auto-arrange-btn');
 
   let loading = false;
-  // クリックした順に並ぶ「channelKey」の配列。先頭がMAIN、以降がSUB1/SUB2/SUB3に対応する。
+  // クリックした順に並ぶ「channelKey」の配列。並び順＝1〜9テンプレートの割り当て順（先頭が1番目）。
   // 配列operationだけで自動整列になる: 途中の要素をsplice(idx,1)で抜けば後続が自動的に繰り上がる。
   let selectedOrder = [];
   let selectionNotice = null; // 上限到達時などの一時メッセージ（再描画やload()の通常メッセージで上書きされる）
+  // channelKey -> fetchUnifiedFeedの生item。render()のたびに作り直す（自動整列実行時に
+  // platform/channel等の完全な情報を組み立てるために必要）。
+  let itemsByKey = new Map();
 
   function channelKey(item) {
     return `${item.platform}::${item.channel}`;
@@ -69,7 +81,11 @@ document.addEventListener('DOMContentLoaded', () => {
     statusEl.classList.toggle('error', !!isError);
   }
 
-  /** 現在のselectedOrderに基づき、既に描画済みの全カードの選択枠表示（MAIN/SUB1…バッジ・枠線）だけを
+  function updateAutoArrangeButtonState() {
+    autoArrangeBtn.disabled = selectedOrder.length === 0;
+  }
+
+  /** 現在のselectedOrderに基づき、既に描画済みの全カードの選択枠表示（番号バッジ・枠線）だけを
    *  更新する。グリッド全体の再構築（render）は行わないため、スクロール位置や経過時間タイマーの
    *  対象要素はそのまま保たれる。 */
   function updateSelectionUI() {
@@ -89,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         badge.remove();
       }
     });
+    updateAutoArrangeButtonState();
   }
 
   /** カード1枚分のDOMを組み立てる。ユーザー由来の文字列は必ずtextContentで入れる（XSS対策）。 */
@@ -177,19 +194,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     card.appendChild(main);
 
-    card.addEventListener('click', () => {
+    card.addEventListener('click', async () => {
       const key = channelKey(item);
       const idx = selectedOrder.indexOf(key);
+      let didSelect = false;
       if (idx !== -1) {
-        // 既に選択済み → 選択解除（自動整列: 後続のSUBが繰り上がる）
+        // 既に選択済み → 選択解除（自動整列: 後続の番号が繰り上がる）
         selectedOrder.splice(idx, 1);
       } else if (selectedOrder.length >= MAX_SLOTS) {
-        // MAIN+SUB1〜3の4件で上限。読み込み中メッセージ等を上書きしないよう一時表示のみ行う。
-        setStatus('選択できるのはMAIN+SUB1〜3の最大4件までです（解除してから選び直してください）', true);
+        // 1〜9枚テンプレートの上限。読み込み中メッセージ等を上書きしないよう一時表示のみ行う。
+        setStatus(`選択できるのは最大${MAX_SLOTS}件までです（解除してから選び直してください）`, true);
         selectionNotice = true;
         return;
       } else {
         selectedOrder.push(key);
+        didSelect = true;
       }
       if (selectionNotice) {
         // 上限通知を出した直後の操作でクリアされた場合、通常の件数表示に戻す。
@@ -198,6 +217,19 @@ document.addEventListener('DOMContentLoaded', () => {
         setStatus(`${count}件`, false);
       }
       updateSelectionUI();
+
+      // 「クリックで即時追加」ON時、新規選択（解除ではない）の場合のみメイン画面へその場で追加する。
+      // 解除側（未選択タイルを閉じる）は破壊的操作のため、自動整列ボタンを押した時にのみ行う。
+      if (didSelect && immediateAddToggle.checked) {
+        try {
+          const result = await window.layoutApi.addChannel({ name: item.channel, platform: item.platform });
+          if (result && !result.ok && result.error && result.error !== '既に追加されています') {
+            setStatus(`${item.displayName || item.channel}の追加に失敗しました: ${result.error}`, true);
+          }
+        } catch (err) {
+          setStatus(`${item.displayName || item.channel}の追加に失敗しました: ${String((err && err.message) || err)}`, true);
+        }
+      }
     });
 
     return card;
@@ -208,6 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 自動整列（splice）で行うため、残った選択の順序・繰り上がりはそのまま保たれる。
     const liveKeys = new Set(items.map((item) => channelKey(item)));
     selectedOrder = selectedOrder.filter((key) => liveKeys.has(key));
+    itemsByKey = new Map(items.map((item) => [channelKey(item), item]));
 
     grid.textContent = '';
     if (!items.length) {
@@ -215,6 +248,7 @@ document.addEventListener('DOMContentLoaded', () => {
       empty.className = 'layout-card-empty';
       empty.textContent = '現在配信中のフォロー配信者はいません';
       grid.appendChild(empty);
+      updateAutoArrangeButtonState();
       return;
     }
     items.forEach((item) => grid.appendChild(buildCard(item)));
@@ -261,6 +295,37 @@ document.addEventListener('DOMContentLoaded', () => {
   // ESCキー・OSの閉じるボタンはmain.js側（before-input-event / ウィンドウ標準の閉じるボタン）で
   // 処理される。こちらはヘッダーの×ボタン専用。
   closeBtn.addEventListener('click', () => window.layoutApi.closeWindow());
+
+  autoArrangeBtn.addEventListener('click', async () => {
+    if (!selectedOrder.length) return;
+    autoArrangeBtn.disabled = true;
+    setStatus('反映中…', false);
+    try {
+      const selection = selectedOrder
+        .map((key) => itemsByKey.get(key))
+        .filter(Boolean)
+        .map((item) => ({
+          platform: item.platform,
+          channel: item.channel,
+          // YouTubeはfetchUnifiedFeedのitem.channelがハンドル文字列そのもの
+          // （applySharedLayoutのフォールバック分岐と同じ扱い）。
+          youtubeChannelId: item.platform === 'youtube' ? item.channel : null,
+        }));
+      const result = await window.layoutApi.autoArrange({
+        selection,
+        chatVisible: chatVisibleToggle.checked,
+      });
+      if (!result || !result.ok) {
+        setStatus(`反映に失敗しました: ${(result && result.error) || '不明なエラー'}`, true);
+        return;
+      }
+      setStatus(`${result.count}件をメイン画面に反映しました`, false);
+    } catch (err) {
+      setStatus(`反映に失敗しました: ${String((err && err.message) || err)}`, true);
+    } finally {
+      autoArrangeBtn.disabled = selectedOrder.length === 0;
+    }
+  });
 
   load();
 });

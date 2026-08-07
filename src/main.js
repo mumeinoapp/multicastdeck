@@ -1811,6 +1811,59 @@ function computeAutoGridRects(count) {
   return rects;
 }
 
+/**
+ * MCD大規模アプデ item20（複窓レイアウト設定）に伴い新設。1〜9枚専用の見栄え重視レイアウト
+ * テンプレート（比率0-1の矩形一覧、先頭＝選択/表示順の1番目から順に割り当て）。
+ * ユーザー確定仕様（2026-08-08、3枚のみユーザー原案「上1+下3分割」が合計4枚になり枚数と矛盾する
+ * ため、他の枚数（5〜9）と同じ「上のブロック数＋下のブロック数＝合計枚数」の法則に合わせて
+ * 「上1(全幅)+下2分割」に補正して実装）:
+ *   1枚=全画面 / 2枚=左右2分割 / 3枚=上1(全幅)+下2分割 / 4枚=四方2x2 /
+ *   5枚=上2分割+下3分割 / 6枚=上3分割+下3分割 / 7枚=上(2x2の4枠)+下3分割 /
+ *   8枚=上3分割+中3分割+下2分割(少し小さめ) / 9枚=3x3(上中下とも3分割)。
+ * 10枚以上は本テンプレート未定義のためcomputeAutoGridRects（均等グリッド）にフォールバックする。
+ * `layoutColumns`（手動列数指定）はこのテンプレート適用時は参照しない
+ * （固定レイアウトのため列数という概念がそもそも無い。10枚以上のフォールバック時のみ従来通り有効）。
+ * 「自動整列」ボタン（メイン画面既存機能・複窓レイアウト設定ウィンドウの新設ボタン共通）から呼ばれる。
+ */
+function computeTemplateRects(count) {
+  if (count <= 0) return [];
+  if (count > 9) return computeAutoGridRects(count);
+
+  /** y〜y+h の帯をn等分した横並びの矩形をn枚分返す */
+  const row = (y, h, n) => {
+    const w = 1 / n;
+    return Array.from({ length: n }, (_, i) => ({ x: i * w, y, w, h }));
+  };
+
+  switch (count) {
+    case 1:
+      return [{ x: 0, y: 0, w: 1, h: 1 }];
+    case 2:
+      return row(0, 1, 2);
+    case 3:
+      return [{ x: 0, y: 0, w: 1, h: 0.5 }, ...row(0.5, 0.5, 2)];
+    case 4:
+      return [...row(0, 0.5, 2), ...row(0.5, 0.5, 2)];
+    case 5:
+      return [...row(0, 0.5, 2), ...row(0.5, 0.5, 3)];
+    case 6:
+      return [...row(0, 0.5, 3), ...row(0.5, 0.5, 3)];
+    case 7: {
+      // 上側(高さ2/3)を2x2の4枠、下側(高さ1/3)を3分割。上段2行の各行高さは(2/3)/2=1/3となり、
+      // 下段の高さ1/3と揃うため、7枚とも見た目のタイル高さが均一に近くなる。
+      const topH = 2 / 3;
+      return [...row(0, topH / 2, 2), ...row(topH / 2, topH / 2, 2), ...row(topH, 1 - topH, 3)];
+    }
+    case 8:
+      // 上3分割・中3分割は高さ3/8ずつ、下2分割だけ高さ2/8とやや小さめにする。
+      return [...row(0, 3 / 8, 3), ...row(3 / 8, 3 / 8, 3), ...row(6 / 8, 2 / 8, 2)];
+    case 9:
+      return [...row(0, 1 / 3, 3), ...row(1 / 3, 1 / 3, 3), ...row(2 / 3, 1 / 3, 3)];
+    default:
+      return computeAutoGridRects(count);
+  }
+}
+
 /** 新規タイル追加時、既存タイルの自由配置を崩さないよう少しずつオフセットして配置する（カスケード配置） */
 function nextCascadeRect(existingCount) {
   const w = 0.42;
@@ -1963,6 +2016,72 @@ function applySharedLayout({ channels, layouts, chatHiddenList, platforms, youtu
   store.set('channelOrder', channels.slice());
   relayoutStreamViews();
   notifyRenderer('channels:changed');
+}
+
+/**
+ * 複窓レイアウト設定ウィンドウ（item20）の「自動整列」ボタンから呼ばれる。
+ * applySharedLayoutと同じ「既存タイルは全部閉じてから選択内容で置き換える」方式を踏襲するが、
+ * 座標は共有データではなくcomputeTemplateRects（1〜9枚テンプレート）で都度算出する。
+ * selection: [{ platform, channel, youtubeChannelId }] 最大9件、並び順＝選択順（テンプレートの
+ * 1枠目から順に割り当てる）。chatVisible: 選択チャンネル全体の一括チャット表示ON/OFF
+ * （true=表示/false=非表示）。YouTube/Kickはチャット統合非対応のためこの設定を適用しても
+ * addChannel側の強制非表示が優先される（従来通り）。
+ */
+function applyLayoutWindowArrange({ selection, chatVisible } = {}) {
+  const list = Array.isArray(selection) ? selection.slice(0, 9) : [];
+  if (list.length === 0) return { ok: false, error: '配信が選択されていません' };
+
+  // 重複（同じplatform+channel）は先勝ちで除去。selectedOrder側で既にユニークなキー管理をしている
+  // 前提だが、IPC越しに壊れたデータが来ても安全なように防御的に行う。
+  const seen = new Set();
+  const dedup = [];
+  list.forEach((item) => {
+    const platform = item && (item.platform === 'youtube' || item.platform === 'kick') ? item.platform : 'twitch';
+    const channelName = String((item && item.channel) || '').trim();
+    if (!channelName) return;
+    const key = `${platform}::${channelName}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    dedup.push({ platform, channelName, youtubeChannelId: (item && item.youtubeChannelId) || channelName });
+  });
+  if (dedup.length === 0) return { ok: false, error: '配信が選択されていません' };
+
+  // 要件⑦: 未選択の既存タイルは閉じる（＝選択内容で完全に入れ替え）。
+  Array.from(streamViews.keys()).forEach((c) => removeChannel(c));
+
+  dedup.forEach(({ platform, channelName, youtubeChannelId }) => {
+    if (platform === 'youtube') {
+      addChannel(channelName, { platform: 'youtube', youtubeChannelId });
+    } else if (platform === 'kick') {
+      addChannel(channelName, { platform: 'kick' });
+    } else {
+      addChannel(channelName);
+    }
+  });
+
+  // 一括チャット表示ON/OFF（Twitchのみ意味を持つ。YouTube/Kickはaddchannel内で常時非表示固定のため
+  // ここで触っても実効はない＝上書きしない）。
+  if (typeof chatVisible === 'boolean') {
+    const chatHidden = store.get('chatHidden');
+    dedup.forEach(({ platform, channelName }) => {
+      if (platform !== 'twitch') return;
+      if (chatVisible) delete chatHidden[channelName];
+      else chatHidden[channelName] = true;
+    });
+    store.set('chatHidden', chatHidden);
+  }
+
+  const order = dedup.map((d) => d.channelName).filter((c) => streamViews.has(c));
+  const rects = computeTemplateRects(order.length);
+  const tileLayouts = store.get('tileLayouts');
+  order.forEach((channelName, i) => {
+    tileLayouts[channelName] = rects[i];
+  });
+  store.set('tileLayouts', tileLayouts);
+  store.set('channelOrder', order);
+  relayoutStreamViews();
+  notifyRenderer('channels:changed');
+  return { ok: true, count: order.length };
 }
 
 /**
@@ -2188,13 +2307,15 @@ function relayoutStreamViews() {
   });
 }
 
-/** 全タイルを現在のチャンネル数に応じたグリッドへ一括リセットする（自由配置が崩れた時の避難ボタン用） */
+/** 全タイルを現在のチャンネル数に応じたレイアウトへ一括リセットする（自由配置が崩れた時の避難ボタン用）。
+ *  2026-08-08: 中身をcomputeAutoGridRects（均等グリッドのみ）からcomputeTemplateRects
+ *  （1〜9枚の見栄え重視テンプレート、10枚以上は従来の均等グリッドにフォールバック）へ置き換え。 */
 function autoArrangeAllTiles() {
   const order = store.get('channelOrder').filter((c) => streamViews.has(c));
   streamViews.forEach((_v, c) => {
     if (!order.includes(c)) order.push(c);
   });
-  const rects = computeAutoGridRects(order.length);
+  const rects = computeTemplateRects(order.length);
   const layouts = {};
   order.forEach((c, i) => {
     layouts[c] = rects[i];
@@ -6045,6 +6166,8 @@ ipcMain.handle('layout-window:close', () => {
   if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.close();
   return true;
 });
+// 段階2の選択(MAIN/SUBは廃止し1〜9の選択順に一本化)をメイン画面へ反映する「自動整列」ボタン用（段階3）。
+ipcMain.handle('layout-window:auto-arrange', (_e, payload) => applyLayoutWindowArrange(payload || {}));
 
 // Auto Tune-Inの対象指定チャンネル（フィード改善③）
 ipcMain.handle('auto-tune-in:get-targets', () => getAutoTuneInTargets());

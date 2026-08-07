@@ -14,4 +14,12 @@ contextBridge.exposeInMainWorld('layoutApi', {
 
   // ヘッダーの×ボタン用。ESCキー・OSの閉じるボタンはmain.js側で直接処理される。
   closeWindow: () => ipcRenderer.invoke('layout-window:close'),
+
+  // 段階3で追加。「クリックで即時追加」モードON時、選んだ配信をメイン画面へその場で追加する
+  // （既存の手動チャンネル追加と全く同じIPC・同じ挙動をそのまま再利用する）。
+  addChannel: (payload) => ipcRenderer.invoke('channels:add', payload),
+
+  // 「自動整列」ボタン用。選択順(最大9件)とチャット一括表示ON/OFFをメインプロセスへ渡し、
+  // 既存タイルを全部閉じて選択内容で置き換えたうえで1〜9枚テンプレートに配置する。
+  autoArrange: (payload) => ipcRenderer.invoke('layout-window:auto-arrange', payload),
 });
