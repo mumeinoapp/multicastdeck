@@ -322,6 +322,15 @@ let activeSidePanelWidth = 0;
  */
 let openPanels = []; // [{ id, width }] 開いている順（先頭が最初に開いたもの）
 
+/**
+ * オーバーレイパネル（ヘルプ・フィードバック・会員登録等）を開く直前に、強制的に
+ * closeAllSidePanels()された openPanels（チャット統合等）の退避先。オーバーレイパネルを
+ * 閉じた時にここへ保存した内容を復元することで、「チャット統合を開いたままヘルプ等を開くと、
+ * 閉じた後も配信タイルが全幅に広がったままになりチャット統合の表示が裏に隠れ続ける」バグを防ぐ。
+ * nullの時は退避対象なし。
+ */
+let sidePanelsSnapshotForOverlay = null;
+
 /** 指定パネルの右端からのオフセット（自分より後に開かれた＝右側に積まれているパネルの幅の合計） */
 function getPanelRightOffset(id) {
   const idx = openPanels.findIndex((p) => p.id === id);
@@ -529,6 +538,14 @@ function closeOverlayPanel() {
   }
   overlayPanelOpenId = null;
   notifyOverlayPanelChanged();
+  // オーバーレイパネルを開く際に強制退避したサイドパネル（チャット統合等）があれば復元する。
+  // これを怠ると activeSidePanelWidth が0のままになり、配信タイルが全幅に広がった状態が
+  // 固定されてしまい、チャット統合パネルの表示がその裏に隠れ続けてしまう。
+  if (sidePanelsSnapshotForOverlay) {
+    openPanels = sidePanelsSnapshotForOverlay;
+    sidePanelsSnapshotForOverlay = null;
+    recalcSidePanels();
+  }
 }
 
 /**
@@ -6057,6 +6074,10 @@ ipcMain.handle('ui:close-side-panel', (_e, id) => {
 });
 
 ipcMain.handle('ui:close-all-side-panels', () => {
+  // ユーザーが明示的に「全部閉じる」を選んだ場合は、オーバーレイパネル用に退避中の
+  // スナップショットも破棄する。破棄しないと、後でオーバーレイパネルを閉じた際に
+  // ユーザーが自分で閉じたはずのチャット統合等が意図せず復元されてしまう。
+  sidePanelsSnapshotForOverlay = null;
   closeAllSidePanels();
   return true;
 });
@@ -6065,8 +6086,12 @@ ipcMain.handle('ui:close-all-side-panels', () => {
 ipcMain.handle('ui:open-overlay-panel', (_e, panelId) => {
   // 上のui:open-side-panelコメントと対になる修正: オーバーレイパネル（配信チェック等）を
   // 開く際も、既に開いているサイドパネルが同様にoverlayPanelViewの裏へ隠れてしまうため、
-  // 先にすべて閉じておく。
-  if (openPanels.length) closeAllSidePanels();
+  // 先にすべて閉じておく。ただし閉じた内容（チャット統合等）はcloseOverlayPanel()で
+  // 復元できるようスナップショットしておく（バグ修正: 復元し忘れによる表示崩れ対策）。
+  if (openPanels.length) {
+    sidePanelsSnapshotForOverlay = openPanels.slice();
+    closeAllSidePanels();
+  }
   openOverlayPanel(panelId);
   return true;
 });
@@ -6085,7 +6110,10 @@ ipcMain.handle('ui:open-help-section', (_e, helpTab, helpAnchor) => {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
-  if (openPanels.length) closeAllSidePanels();
+  if (openPanels.length) {
+    sidePanelsSnapshotForOverlay = openPanels.slice();
+    closeAllSidePanels();
+  }
   openOverlayPanel('help', { helpTab: helpTab || '', helpAnchor: helpAnchor || '' });
   return true;
 });
@@ -6225,9 +6253,25 @@ async function paymentBackendFetch(pathname, options = {}) {
     /* レスポンスがJSONでない場合は無視 */
   }
   if (!res.ok) {
-    throw new Error((body && (body.error || body.message)) || `サーバーエラー (HTTP ${res.status})`);
+    throw new Error(formatPaymentBackendError(body, res.status));
   }
   return body;
+}
+
+/**
+ * バックエンドのエラーレスポンス({ error, message })から表示用メッセージを組み立てる。
+ * `internal_error`/`discord_send_failed`等の汎用エラーコードは`message`に実際の例外内容が
+ * 入っているため、`error`（コードのみ）を優先してしまうと「internal_error」としか表示されず
+ * 原因調査ができない。両方ある場合は両方表示し、`message`が無ければ`error`のみ、それも無ければ
+ * HTTPステータスのみを表示する。
+ */
+function formatPaymentBackendError(body, status) {
+  const code = body && body.error;
+  const detail = body && body.message;
+  if (code && detail) return `${code}: ${detail}`;
+  if (detail) return detail;
+  if (code) return code;
+  return `サーバーエラー (HTTP ${status})`;
 }
 
 /** /statusを呼び出し、premiumUnlocked・proStatusを更新する。ログイン中でなければ何もしない。 */
@@ -6239,7 +6283,7 @@ async function refreshProAuthStatus() {
     if (!base) return null;
     const res = await fetch(`${base}/status?token=${encodeURIComponent(token)}`);
     const body = await res.json().catch(() => null);
-    if (!res.ok) throw new Error((body && (body.error || body.message)) || `サーバーエラー (HTTP ${res.status})`);
+    if (!res.ok) throw new Error(formatPaymentBackendError(body, res.status));
     store.set('proStatus', body);
     const active = isDeveloperEmail(store.get('proAuthEmail')) || !!(body && (body.active || body.premiumUnlocked));
     store.set('premiumUnlocked', active);
