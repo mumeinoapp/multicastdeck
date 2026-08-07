@@ -111,7 +111,25 @@
     2セクションは段階3/4向けに機能・見た目とも変更なしで新パネルへそのまま移設。独立レビューで
     TDZ落とし穴（宣言位置）とオーバーレイパネル/サイドパネル同時使用時の重なり不可視化バグの
     2件を検出・修正、再レビューPASS。git commit 0203fcf。**実機での動作・見た目確認はまだ未実施。**
-    残り: 段階3(要件②専用タブ)/段階4(要件③圧縮設定)/段階5(統合実機確認)。
+
+    ⚠️**2026-08-07セッション追加相談で方針転換確定**: ユーザーから項目20「複窓レイアウト設定」
+    （独立BrowserWindow方式）と項目16「配信チェック」は同一の想定で進めていたはずが、実際には
+    項目16はBrowserViewオーバーレイ方式（段階1・2）で実装されており認識がズレていたと判明。
+    ユーザー確認の結果、「配信チェックも複窓レイアウト設定と同じ独立BrowserWindow方式
+    （alwaysOnTop・ドラッグ可・外側クリックで閉じない・×/ESCのみ閉じる）に統一する」ことで確定。
+    **段階1・2で実装したオーバーレイパネル方式のunified-feed部分は置き換え対象**（ただし
+    overlayPanelView基盤自体はhelp/welcome/premium-locked/feedback/pro-authの5モーダルで
+    現役のため、基盤コード自体の無駄ではない）。残りの段階3(要件②専用タブ)/段階4(要件③圧縮設定)は
+    独立ウィンドウ前提で以下の段階A〜Eに再分割して進行する:
+    - 段階A: 独立ウィンドウの土台のみ新設（中身はプレースホルダー）
+      → **実装・独立レビューPASS済み（2026-08-07セッション）**。src/renderer/stream-check-window/
+      配下新規4ファイル、src/main.jsのcreateStreamCheckWindow()等、src/preload.jsの
+      openStreamCheckWindow、renderer.jsのunifiedFeedBtnハンドラ差し替え。旧overlay-panel側の
+      mountUnifiedFeed()はまだ削除していない（段階Dで撤去予定）。実機動作確認はまだ未実施。
+    - 段階B: カード一覧・フィルタ・自動更新の表示ロジック移植
+    - 段階C: 自動追加対象選択・フォロー自動追加設定（Twitch連携）の移植
+    - 段階D: 旧overlay-panel側のunified-feedコード撤去、分岐整理
+    - 段階E: 実機確認＋要件②③の続行
 
 ## 実機確認で追加報告された3件（2026-08-07、対応済み・実機確認前）
 
@@ -189,6 +207,12 @@
     （既存channels:add再利用）・`autoArrange`を追加。layout-window.js/css/index.htmlに
     「自動整列」ボタン・2トグルのUIとロジックを追加、SLOT_LABELSはMAIN/SUB1〜3から1〜9の
     番号バッジに変更。次は独立レビュー→実機確認。
+
+    ⚠️**2026-08-07セッション追加**: 項目16「配信チェック」も、当初のBrowserViewオーバーレイ方式
+    から、この項目20と同じ独立BrowserWindow方式に統一されることが確定した（詳細は項目16参照）。
+    ただし実装は完全に別系統（`src/renderer/stream-check-window/`配下に新規ファイル、
+    `createStreamCheckWindow()`をmain.jsに新設）とし、このlayout-window関連コードには
+    一切手を加えていない。段階3(このセクション)への影響はなし。
 
 ## UIデザインについて（ユーザーからの補足）
 

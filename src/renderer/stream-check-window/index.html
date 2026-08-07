@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!--
+  配信チェックウィンドウ（2026-08-07、方針転換により新設・段階A）のHTML。
+  main.jsのcreateStreamCheckWindow()がloadFileで読み込む、独立したBrowserWindowの中身。
+
+  経緯: 「配信チェック」（フォロー中/登録中の配信中一覧、旧unified-feed）は当初オーバーレイ
+  パネル方式（src/renderer/overlay-panel/）で段階1・2まで実装していたが、ユーザーとの
+  再確認の結果、「複窓レイアウト設定」（src/renderer/layout-window/）と同じ独立BrowserWindow
+  方式（alwaysOnTop・ドラッグ可・外側クリックで閉じない・×/ESCのみ閉じる）に統一することが
+  確定した。詳細はMCD大規模アプデ_元依頼一覧.md 項目16参照。
+
+  段階Aでは独立ウィンドウの土台のみ新設し、中身は準備中のダミー表示。実際のカード一覧・
+  自動追加設定などのロジック移植は段階B以降で行う（旧overlay-panel側のmountUnifiedFeed()は
+  段階Dで撤去するまでこのまま残す）。
+-->
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- img-src: 将来(段階B)でTwitch/YouTube/Kickのプロフィール画像（httpsリモートURL）と
+         フォールバック用インラインSVG（data:）を表示するため、layout-window/index.htmlと
+         同じCSPをあらかじめ設定しておく。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:;"
+    />
+    <title>配信一覧</title>
+    <link rel="stylesheet" href="stream-check-window.css" />
+  </head>
+  <body>
+    <div class="stream-check-window">
+      <header class="stream-check-window-header">
+        <span class="stream-check-window-title">配信一覧</span>
+        <div class="stream-check-window-header-actions">
+          <button type="button" class="stream-check-window-close" id="stream-check-close-btn" aria-label="閉じる">×</button>
+        </div>
+      </header>
+
+      <main class="stream-check-window-body">
+        <div class="stream-check-window-placeholder" id="stream-check-placeholder">
+          準備中です（段階Bで配信中一覧の表示を実装予定）
+        </div>
+      </main>
+    </div>
+
+    <script src="stream-check-window.js"></script>
+  </body>
+</html>

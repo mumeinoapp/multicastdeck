@@ -79,6 +79,11 @@ contextBridge.exposeInMainWorld('api', {
   // 閉じる操作はそのウィンドウ側（layout-window-preload.js）が担当する。
   openLayoutWindow: () => ipcRenderer.invoke('layout-window:open'),
 
+  // 配信チェック（2026-08-07、方針転換により独立BrowserWindow方式へ）。openLayoutWindowと
+  // 同じ考え方で、独立したBrowserWindowを開くだけ。閉じる操作はそのウィンドウ側
+  // （stream-check-window-preload.js）が担当する。
+  openStreamCheckWindow: () => ipcRenderer.invoke('stream-check-window:open'),
+
   hideContentViews: () => ipcRenderer.invoke('ui:hide-content-views'),
   showContentViews: () => ipcRenderer.invoke('ui:show-content-views'),
   openSidePanel: (id, width) => ipcRenderer.invoke('ui:open-side-panel', { id, width }),

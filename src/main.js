@@ -142,6 +142,9 @@ let mainWindow;
  * @type {BrowserWindow|null}
  */
 let layoutWindow = null;
+// 配信チェックウィンドウ（2026-08-07、方針転換により新設）。旧overlayPanelView方式
+// （unified-feed）から独立BrowserWindow方式へ切り替え中。layoutWindowと同じ管理パターン。
+let streamCheckWindow = null;
 
 // 「バージョン」メニューの表示状態。{ status: 'idle'|'checking'|'available'|
 // 'not-available'|'downloading'|'downloaded'|'error', version?, percent? }
@@ -1289,6 +1292,10 @@ function createMainWindow() {
     if (layoutWindow && !layoutWindow.isDestroyed()) {
       layoutWindow.close();
     }
+    // 配信チェックウィンドウも同じ理由（parent未指定の完全独立ウィンドウ）で明示的に閉じる。
+    if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {
+      streamCheckWindow.close();
+    }
   });
 
   // ネイティブのアプリケーションメニューは使わない。ファイル/表示/ヘルプ/バージョンは
@@ -1362,6 +1369,71 @@ function createLayoutWindow() {
   });
 
   return layoutWindow;
+}
+
+/**
+ * 配信チェックウィンドウを開く（2026-08-07新設、段階A）。
+ *
+ * 経緯: 「配信チェック」（フォロー中/登録中の配信中一覧、旧unified-feed）は当初オーバーレイ
+ * パネル方式（overlayPanelView、BrowserView重ね表示）で段階1・2まで実装していたが、
+ * ユーザーとの再確認の結果、「複窓レイアウト設定」（createLayoutWindow()）と同じ独立
+ * BrowserWindow方式に統一することが確定した。詳細はMCD大規模アプデ_元依頼一覧.md 項目16参照。
+ *
+ * createLayoutWindow()と全く同じ設計方針を踏襲する:
+ * - parent は指定しない（完全に独立したウィンドウ）。
+ * - alwaysOnTop: true。frame: true（タイトルバーのドラッグ移動・OS標準の閉じるボタンに任せる）。
+ * - ウィンドウ外クリックでは閉じない。閉じられるのは「HTML側の×ボタン」「ESCキー」
+ *   「OSの閉じるボタン」の3つだけ。
+ * - 既に開いている場合は多重生成せず、既存ウィンドウをフォーカスするだけ。
+ *
+ * 段階Aでは中身はプレースホルダーのみで、旧overlay-panel側のmountUnifiedFeed()（配信中一覧の
+ * 取得・表示・自動追加設定ロジック一式）はまだ削除しない（段階Dで撤去予定）。ヘッダーボタンの
+ * 導線だけをこちらへ向け、実際の表示ロジック移植は段階B以降で行う。
+ */
+function createStreamCheckWindow() {
+  if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {
+    if (streamCheckWindow.isMinimized()) streamCheckWindow.restore();
+    streamCheckWindow.focus();
+    return streamCheckWindow;
+  }
+
+  streamCheckWindow = new BrowserWindow({
+    width: 900,
+    height: 700,
+    minWidth: 480,
+    minHeight: 360,
+    title: '配信一覧',
+    alwaysOnTop: true,
+    show: false,
+    frame: true,
+    backgroundColor: '#1a1a1e',
+    webPreferences: {
+      preload: path.join(__dirname, 'renderer', 'stream-check-window', 'stream-check-window-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  streamCheckWindow.setMenuBarVisibility(false);
+  streamCheckWindow.loadFile(path.join(__dirname, 'renderer', 'stream-check-window', 'index.html'));
+
+  streamCheckWindow.once('ready-to-show', () => {
+    if (streamCheckWindow && !streamCheckWindow.isDestroyed()) streamCheckWindow.show();
+  });
+
+  // ESCキーで閉じる。createLayoutWindow()と同じく、このウィンドウ単体で完結させる。
+  streamCheckWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      if (streamCheckWindow && !streamCheckWindow.isDestroyed()) streamCheckWindow.close();
+    }
+  });
+
+  streamCheckWindow.on('closed', () => {
+    streamCheckWindow = null;
+  });
+
+  return streamCheckWindow;
 }
 
 /** 「バージョン」メニュー右上の赤丸バッジを出すべきか。renderer側に渡す状態にも使う。 */
@@ -6168,6 +6240,18 @@ ipcMain.handle('layout-window:close', () => {
 });
 // 段階2の選択(MAIN/SUBは廃止し1〜9の選択順に一本化)をメイン画面へ反映する「自動整列」ボタン用（段階3）。
 ipcMain.handle('layout-window:auto-arrange', (_e, payload) => applyLayoutWindowArrange(payload || {}));
+
+// ---- 配信チェックウィンドウ（2026-08-07新設、段階A） ----
+// open はメインウィンドウのヘッダー「📡 配信チェック」ボタンから、close は当該ウィンドウ自身の
+// ×ボタン（stream-check-window.js）から呼ばれる。ESCキー・OSの閉じるボタンはmain.js側で処理される。
+ipcMain.handle('stream-check-window:open', () => {
+  createStreamCheckWindow();
+  return true;
+});
+ipcMain.handle('stream-check-window:close', () => {
+  if (streamCheckWindow && !streamCheckWindow.isDestroyed()) streamCheckWindow.close();
+  return true;
+});
 
 // Auto Tune-Inの対象指定チャンネル（フィード改善③）
 ipcMain.handle('auto-tune-in:get-targets', () => getAutoTuneInTargets());

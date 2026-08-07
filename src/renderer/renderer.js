@@ -1443,16 +1443,14 @@ window.api.onZappingError(({ message }) => {
 
 const unifiedFeedBtn = document.getElementById('unified-feed-btn');
 
+// 2026-08-07、方針転換によりオーバーレイパネル方式から独立BrowserWindow方式へ切替（段階A）。
+// 複窓レイアウト設定と同じ考え方で、押したら「開く（既に開いていればフォーカスするだけ）」の
+// 単純な導線にする。トグルクローズはウィンドウ自身の×ボタン・ESCキーが担当する
+// （createStreamCheckWindow()参照）。旧overlayPanelOpenId==='unified-feed'の分岐は
+// 段階Dでoverlay-panel側のunified-feedコードを撤去する際にあわせて整理する。
 unifiedFeedBtn.addEventListener('click', async () => {
   if (!premiumUnlocked) { showPremiumLockedModal(); return; }
-  // 旧サイドパネル方式と同じく、開いている時にもう一度押したら閉じる（トグル）。
-  if (overlayPanelOpenId === 'unified-feed') {
-    await window.api.closeOverlayPanel();
-    return;
-  }
-  // クリック起点なので、必ずopenOverlayPanelSafe経由で開く（同じクリックがdocumentまで
-  // バブリングして「外側クリック閉じ」に引っかかるのを防ぐ。定義箇所のコメント参照）。
-  await openOverlayPanelSafe('unified-feed');
+  await window.api.openStreamCheckWindow();
 });
 
 // ---- 音量ミキサー（ストリームごとの個別音量調整） ----
