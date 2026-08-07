@@ -75,13 +75,11 @@ contextBridge.exposeInMainWorld('api', {
   stopZapping: () => ipcRenderer.invoke('zapping:stop'),
   skipZapping: () => ipcRenderer.invoke('zapping:skip'),
 
-  // 複窓レイアウト設定（2026-08-08新設）。独立したBrowserWindowを開くだけ。
-  // 閉じる操作はそのウィンドウ側（layout-window-preload.js）が担当する。
-  openLayoutWindow: () => ipcRenderer.invoke('layout-window:open'),
-
-  // 配信チェック（2026-08-07、方針転換により独立BrowserWindow方式へ）。openLayoutWindowと
-  // 同じ考え方で、独立したBrowserWindowを開くだけ。閉じる操作はそのウィンドウ側
-  // （stream-check-window-preload.js）が担当する。
+  // 配信チェック（2026-08-07、方針転換により独立BrowserWindow方式へ）。独立した
+  // BrowserWindowを開くだけ。閉じる操作はそのウィンドウ側（stream-check-window-preload.js）
+  // が担当する。
+  // 2026-08-08追記: 独立ウィンドウ「複窓レイアウト設定」（旧openLayoutWindow）は、配信一覧
+  // ウィンドウの「レイアウト配置」ボタンに機能統合されたため削除した。
   openStreamCheckWindow: () => ipcRenderer.invoke('stream-check-window:open'),
 
   hideContentViews: () => ipcRenderer.invoke('ui:hide-content-views'),

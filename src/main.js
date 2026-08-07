@@ -141,16 +141,13 @@ const store = new Store({
 /** @type {BrowserWindow} */
 let mainWindow;
 
-/**
- * 複窓レイアウト設定ウィンドウ（2026-08-08新設）。メインウィンドウとは独立した
- * BrowserWindow（parent指定なし・常に最前面）で、単一インスタンスのみを許可する。
- * TDZ（宣言前使用）を避けるため、createLayoutWindow()やmainWindow.on('closed')より
- * 手前のこの位置で宣言しておく。
- * @type {BrowserWindow|null}
- */
-let layoutWindow = null;
 // 配信チェックウィンドウ（2026-08-07、方針転換により新設）。旧overlayPanelView方式
-// （unified-feed）から独立BrowserWindow方式へ切り替え中。layoutWindowと同じ管理パターン。
+// （unified-feed）から独立BrowserWindow方式へ切り替え中。
+// 2026-08-08追記: 独立ウィンドウ「複窓レイアウト設定」（旧layoutWindow、src/renderer/
+// layout-window/配下）は、本ウィンドウの「配信中一覧」タブに「レイアウト配置」ボタンとして
+// 機能統合されたことで役目を終えたため削除した。ただし選択内容を反映する共通ロジック
+// （applyLayoutWindowArrange・computeTemplateRects・IPC 'layout-window:auto-arrange'）は
+// このウィンドウの「レイアウト配置」ボタンから現役で使われているため維持している。
 let streamCheckWindow = null;
 
 // 「バージョン」メニューの表示状態。{ status: 'idle'|'checking'|'available'|
@@ -1248,8 +1245,8 @@ function showContentViewsForOverlay() {
  * 段階F追加（要望⑪）: 「最前面に表示される属性を持つもの全てに共通で、アクティブになった
  * ウィンドウは他のウィンドウの上に表示されるようにする」対応。
  *
- * このアプリのトップレベルBrowserWindowはmainWindow・layoutWindow（alwaysOnTop:true）・
- * streamCheckWindow（parent: mainWindow）の3つ。特にstreamCheckWindowの「詳しく」ボタン等から
+ * このアプリのトップレベルBrowserWindowはmainWindow・streamCheckWindow（parent: mainWindow）の
+ * 2つ（旧layoutWindowは2026-08-08に削除済み）。特にstreamCheckWindowの「詳しく」ボタン等から
  * ui:open-help-sectionでmainWindow.focus()を呼ぶと、Electron/Windowsの実装上、親であるはずの
  * mainWindowがOwned Window（子）のstreamCheckWindowより前面に出てしまうケースが実機で確認された
  * （子は親より常に前面、という仕様が常に厳密に保たれるとは限らない）。
@@ -1323,13 +1320,9 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    // 複窓レイアウト設定ウィンドウは parent 指定を持たない完全独立ウィンドウ（＝Electronの
+    // 配信チェックウィンドウは parent 指定を持たない完全独立ウィンドウ（＝Electronの
     // 親子連動では閉じない）ため、メインウィンドウが閉じられた時に取り残されないよう
-    // 明示的に閉じる。既にユーザーが閉じていれば layoutWindow は null になっている。
-    if (layoutWindow && !layoutWindow.isDestroyed()) {
-      layoutWindow.close();
-    }
-    // 配信チェックウィンドウも同じ理由（parent未指定の完全独立ウィンドウ）で明示的に閉じる。
+    // 明示的に閉じる。
     if (streamCheckWindow && !streamCheckWindow.isDestroyed()) {
       streamCheckWindow.close();
     }
@@ -1342,72 +1335,6 @@ function createMainWindow() {
   // 要望があり、ネイティブメニューでは項目の位置・サイズを自由に制御できない（Windowsでは
   // アイコンは常にラベルの左側固定）ため、HTML/CSSで自由に配置できる自作メニューに切り替えた。
   Menu.setApplicationMenu(null);
-}
-
-/**
- * 複窓レイアウト設定ウィンドウを開く（2026-08-08新設、第1段階）。
- *
- * 既存のオーバーレイパネル（BrowserView方式）とは意図的に別系統の、完全に独立した
- * BrowserWindowとして実装している。理由と仕様は以下の通り:
- * - parent は指定しない（メインウィンドウの子にしない）。配信タイルの上に被せるのではなく、
- *   OSレベルで自由にドラッグ移動できる別ウィンドウとして扱いたいため。
- * - alwaysOnTop: true。配置作業中にメインウィンドウの裏へ回り込まないようにする。
- * - frame: true。タイトルバーのドラッグ移動・閉じるボタンをOS標準の実装に任せる
- *   （カスタムタイトルバーは第1段階では不要）。
- * - ウィンドウ外クリックでは閉じない（フォーカス喪失で閉じる処理は入れない）。
- *   閉じられるのは「HTML側の×ボタン」「ESCキー」「OSの閉じるボタン」の3つだけ。
- *
- * 既に開いている場合は多重生成せず、既存ウィンドウをフォーカスするだけにする。
- */
-function createLayoutWindow() {
-  if (layoutWindow && !layoutWindow.isDestroyed()) {
-    if (layoutWindow.isMinimized()) layoutWindow.restore();
-    layoutWindow.focus();
-    return layoutWindow;
-  }
-
-  layoutWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
-    // カードのグリッドが1列まで潰れて実用性が無くなるサイズまでは縮められないようにする。
-    minWidth: 520,
-    minHeight: 400,
-    title: '複窓レイアウト設定',
-    alwaysOnTop: true,
-    // ちらつき防止（表示準備が整ってから見せる）。既存のBrowserView群と同じ考え方。
-    show: false,
-    frame: true,
-    backgroundColor: '#1a1a1e',
-    webPreferences: {
-      preload: path.join(__dirname, 'renderer', 'layout-window', 'layout-window-preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-
-  layoutWindow.setMenuBarVisibility(false);
-  layoutWindow.loadFile(path.join(__dirname, 'renderer', 'layout-window', 'index.html'));
-
-  bringWindowToFrontOnFocus(layoutWindow);
-
-  layoutWindow.once('ready-to-show', () => {
-    if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.show();
-  });
-
-  // ESCキーで閉じる。既存の forwardEscapeKey() はBrowserView（＝メインウィンドウのrenderer側へ
-  // 転送する前提）専用なので流用せず、このウィンドウ単体で完結する形で実装する。
-  layoutWindow.webContents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown' && input.key === 'Escape') {
-      if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.close();
-    }
-  });
-
-  layoutWindow.on('closed', () => {
-    layoutWindow = null;
-  });
-
-  return layoutWindow;
 }
 
 /**
@@ -1492,9 +1419,21 @@ function createStreamCheckWindow() {
   });
 
   // ESCキーで閉じる。createLayoutWindow()と同じく、このウィンドウ単体で完結させる。
+  // 2026-08-08追加: このウィンドウには自作メニューバーが無く、メインウィンドウの「表示＞
+  // 開発者ツール」（app-menu:toggle-devtools）は常にmainWindow.webContents側を開くため、
+  // このウィンドウにフォーカスがある状態でCtrl+Shift+I/F12を押しても何も起きなかった
+  // （実機報告、YouTubeアイコン不具合の調査に必要）。F12とCtrl+Shift+Iをこのウィンドウ自身の
+  // devtoolsに直接紐づける。
   streamCheckWindow.webContents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown' && input.key === 'Escape') {
+    if (input.type !== 'keyDown') return;
+    if (input.key === 'Escape') {
       if (streamCheckWindow && !streamCheckWindow.isDestroyed()) streamCheckWindow.close();
+      return;
+    }
+    const isDevToolsShortcut =
+      input.key === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i'));
+    if (isDevToolsShortcut && streamCheckWindow && !streamCheckWindow.isDestroyed()) {
+      streamCheckWindow.webContents.toggleDevTools();
     }
   });
 
@@ -6591,21 +6530,12 @@ ipcMain.handle('kick:resolve-chatroom-id', (_e, channelName) => resolveKickChatr
 // プラットフォーム横断の統一フィード（ロードマップ項目6）。手動更新ボタンからのみ呼ばれる（常時ポーリングなし）。
 ipcMain.handle('unified-feed:fetch', (_e, options) => fetchUnifiedFeed(options || {}));
 
-// ---- 複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階） ----
-// open はメインウィンドウの自作メニューバー（表示メニュー）から、close は当該ウィンドウ自身の
-// ×ボタン（layout-window.js）から呼ばれる。ESCキー・OSの閉じるボタンはmain.js側で処理される。
-ipcMain.handle('layout-window:open', () => {
-  createLayoutWindow();
-  return true;
-});
-ipcMain.handle('layout-window:close', () => {
-  if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.close();
-  return true;
-});
-// 段階2の選択(MAIN/SUBは廃止し1〜9の選択順に一本化)をメイン画面へ反映する「自動整列」ボタン用（段階3）。
-// 2026-08-08項目⑩追加: このハンドラは呼び出し元ウィンドウを区別しないため、配信一覧ウィンドウの
-// 「レイアウト配置」ボタン（stream-check-window-preload.jsのlayoutAutoArrange）からも同じチャンネル名で
-// そのまま呼ばれる。新規ハンドラの追加は不要。
+// ---- レイアウト配置（旧・複窓レイアウト設定ウィンドウ）反映用IPC ----
+// 2026-08-08追記: 独立ウィンドウ「複窓レイアウト設定」（layout-window:open/close）は、
+// 配信一覧ウィンドウの「配信中一覧」タブに「レイアウト配置」ボタンとして機能統合されたことで
+// 役目を終えたため削除した。選択内容をメイン画面へ反映する本体（applyLayoutWindowArrange）と
+// 以下のIPCハンドラ自体は、配信一覧ウィンドウの「レイアウト配置」ボタン
+// （stream-check-window-preload.jsのlayoutAutoArrange）から現役で使われているため維持する。
 ipcMain.handle('layout-window:auto-arrange', (_e, payload) => applyLayoutWindowArrange(payload || {}));
 
 // ---- 配信チェックウィンドウ（2026-08-07新設、段階A） ----
