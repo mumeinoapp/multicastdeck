@@ -911,7 +911,15 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (_) {
       addWithChatHiddenDefault = false;
     }
-    await load();
+    // 2026-08-08修正: 以前は単一の await load() で3プラットフォームを一括取得しており、
+    // YouTube（非公式HTMLスクレイプで最大20秒程度かかりうる）の遅さにTwitch/Kick（本来
+    // 数秒で終わる）まで引っ張られ、ウィンドウを開いた直後の初回表示が「全サイト20秒待ち」に
+    // なってしまっていた不具合の修正。自動更新タイマー（startAutoTimer）と同じ考え方で、
+    // Twitch+Kick分とYouTube分を別々のload()呼び出しに分離し、速い方は待たずに即座に表示する。
+    // load()内のmerge処理（!includeX時に既存unifiedFeedItemsから該当プラットフォーム分を
+    // 引き継ぐロジック）は元々この並行呼び出しを想定して作られているため、そのまま流用できる。
+    load({ includeYoutube: false });
+    load({ includeTwitch: false, includeKick: false });
     startAutoTimer();
     refreshAutoTuneInStatus();
   })();

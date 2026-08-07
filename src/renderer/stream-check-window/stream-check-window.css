@@ -222,7 +222,10 @@ body {
 
 .stream-check-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  /* 2026-08-08修正: 220pxだとYouTubeカード（チェックボックスが2個並ぶ分、他プラットフォーム
+     より横幅の余裕が少ない）でオフライン表記が詰まって歪む頻度が高かったため、最小幅を広げて
+     余裕を持たせた。 */
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
 }
 
@@ -321,6 +324,11 @@ body {
   flex-direction: column;
   gap: 3px;
   flex: 1;
+  /* 2026-08-08修正: 子要素（meta-row内のviewers/elapsed等）がflex-shrink:0のため、
+     カードが狭い時（グリッドのminmax(220px,1fr)や、YouTubeカードはチェックボックスが2個
+     並ぶ分だけ幅が更に厳しい）に自身の幅を超えてはみ出し、隣のアバター/操作ボタンへ視覚的に
+     被って表示が歪む不具合があった。overflow:hiddenで自身の箱の外へはみ出させないようにする。 */
+  overflow: hidden;
 }
 
 .stream-check-card-name-row {
@@ -373,6 +381,7 @@ body {
   font-size: 11px;
   color: #9aa3b2;
   min-width: 0;
+  overflow: hidden;
 }
 
 .stream-check-card-category {
@@ -381,13 +390,25 @@ body {
   white-space: nowrap;
 }
 
+/* 2026-08-08修正: 以前はflex-shrink:0で「絶対に縮まない」指定だったため、カードが狭い時に
+   このテキストが自分の箱の外へそのままはみ出し、オフライン表記などが操作ボタンやアバターに
+   被って歪んで見える不具合の原因になっていた。縮小・省略できるようにして、狭い時は「…」で
+   自然に切り詰められるようにする（親のoverflow:hiddenと合わせて、はみ出し自体も防止済み）。 */
 .stream-check-card-elapsed {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 .stream-check-card-viewers {
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -416,6 +437,10 @@ body {
  * 直下に配置し、まだ追加していないチャンネルでは操作不能（disabled）にする。 */
 .stream-check-card-actions {
   flex-shrink: 0;
+  /* 2026-08-08修正: ボタン幅（「オフライン」「削除」等の文言長）に応じて伸縮していたため、
+     カードごとに操作列の幅が不揃いになり、狭いカードではmain側を過剰に圧迫していた。
+     固定のmin-widthを与えて安定させる。 */
+  min-width: 62px;
   display: flex;
   flex-direction: column;
   gap: 6px;

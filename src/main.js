@@ -3339,6 +3339,39 @@ async function scrapeYoutubeSubscribedChannels() {
     `);
     const script = `
       (function () {
+        // 2026-08-08修正: 従来は el.querySelector('#avatar img, yt-img-shadow img, img') の
+        // 単純な軽量DOM検索のみだったが、依然として「アイコンが表示されない」報告が続いていた。
+        // 現在のYouTube側マークアップは、アバター画像がLitベースのカスタム要素（例:
+        // yt-avatar-shape等）のshadow DOM内に置かれていることがあり、通常のquerySelectorは
+        // shadow境界を貫通できず見つからない。そのため、shadowRootも辿る深い探索に変更した。
+        function findImgDeep(root) {
+          var stack = [root];
+          while (stack.length) {
+            var node = stack.pop();
+            if (!node) continue;
+            if (node.tagName === 'IMG') return node;
+            var children = node.children ? Array.prototype.slice.call(node.children) : [];
+            for (var i = 0; i < children.length; i++) stack.push(children[i]);
+            if (node.shadowRoot) stack.push(node.shadowRoot);
+          }
+          return null;
+        }
+        function extractAvatarUrl(el) {
+          var avatarEl = el.querySelector('#avatar img, yt-img-shadow img, img') || findImgDeep(el);
+          if (!avatarEl) return null;
+          var src = avatarEl.currentSrc || avatarEl.src || '';
+          if (!src || src.indexOf('data:image/gif') === 0 || src.indexOf('data:image/png') === 0) {
+            src = avatarEl.getAttribute('data-src') || '';
+          }
+          if (!src) {
+            var srcset = avatarEl.getAttribute('srcset') || avatarEl.srcset || '';
+            if (srcset) {
+              var first = srcset.split(',')[0].trim().split(' ')[0];
+              if (first) src = first;
+            }
+          }
+          return src || null;
+        }
         var items = Array.from(document.querySelectorAll('ytd-channel-renderer'));
         var seen = {};
         var result = [];
@@ -3352,15 +3385,9 @@ async function scrapeYoutubeSubscribedChannels() {
             seen[href] = true;
             // アバター画像（配信チェックパネルのカード表示用、2026-08-08追加）。
             // YouTube側は遅延読み込みのため、src が空/1x1プレースホルダのことがある。その場合は
-            // data-src へフォールバックする。取れなければ null のままにする（装飾要素なので
-            // 取得できなくても一覧取得自体は成功扱い）。
-            var avatarEl = el.querySelector('#avatar img, yt-img-shadow img, img');
-            var avatarUrl = null;
-            if (avatarEl) {
-              var src = avatarEl.src || '';
-              if (!src || src.indexOf('data:image/gif') === 0) src = avatarEl.getAttribute('data-src') || '';
-              avatarUrl = src || null;
-            }
+            // data-src / srcset へフォールバックする。取れなければ null のままにする（装飾要素
+            // なので取得できなくても一覧取得自体は成功扱い）。
+            var avatarUrl = extractAvatarUrl(el);
             result.push({ href: href, name: name, avatarUrl: avatarUrl });
           } catch (e) {
             /* 1要素の解析失敗で一覧全体を落とさない */
