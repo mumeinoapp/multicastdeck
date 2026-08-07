@@ -42,6 +42,16 @@ const MANUAL_REFRESH_COOLDOWN_MS = 5 * 1000;
 // main.js側の共通ソートは変更していない。
 const PLATFORM_SORT_ORDER = { twitch: 0, youtube: 1, kick: 2 };
 
+// 項目⑩追加: 「レイアウト配置」用のクリック選択（layout-window.jsのSLOT_LABELS/MAX_SLOTSと
+// 完全に同じ、1〜9枚テンプレートの割当数に合わせた上限）。
+const LAYOUT_SLOT_LABELS = ['1', '2', '3', '4', '5', '6', '7', '8', '9'];
+const LAYOUT_MAX_SLOTS = LAYOUT_SLOT_LABELS.length;
+
+/** レイアウト選択の識別キー。layout-window.jsのchannelKey()と同じ形式（platform::channel）。 */
+function layoutChannelKey(item) {
+  return `${item.platform}::${item.channel}`;
+}
+
 /** Twitch→YouTube→Kickの順、各プラットフォーム内はLIVE優先→視聴者数の多い順。 */
 function sortUnifiedFeedItems(items) {
   return [...items].sort((a, b) => {
@@ -108,9 +118,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeBtn = document.getElementById('stream-check-close-btn');
   const filterBtns = Array.from(document.querySelectorAll('.stream-check-window-filter-btn'));
 
+  // 項目⑩追加: 「レイアウト配置」ボタンと選択件数表示。
+  const layoutPlaceBtn = document.getElementById('stream-check-layout-place-btn');
+  const layoutSelectionCountEl = document.getElementById('stream-check-layout-selection-count');
+
   let loading = false;
   let platformFilter = 'all';
   let unifiedFeedItems = [];
+  // 項目⑩追加: クリックした順に並ぶchannelKeyの配列（layout-window.jsのselectedOrderと同じ考え方）。
+  // 「自動追加の対象にする」isTarget・「常に表示」isPinnedとは完全に独立したデータ。フィルタ変更や
+  // 自動更新でカードが再描画されても選択状態を保つため、render()をまたいで保持する外部変数にする。
+  let layoutSelectedOrder = [];
+  // channelKey -> unifiedFeedItems内の生item（プラットフォーム絞り込み前の全件から作る。フィルタで
+  // 非表示中のカードを選択していても「レイアウト配置」実行時に情報を引けるようにするため）。
+  let layoutItemsByKey = new Map();
   // 2026-08-08追加（要望⑦）: Twitch分とYouTube分で更新頻度を分けるため、タイマーを2本に分離。
   // 段階F追加: Kick分も5秒間隔で独立更新するため3本目を追加。
   let twitchAutoTimer = null;
@@ -349,10 +370,64 @@ document.addEventListener('DOMContentLoaded', () => {
     actions.appendChild(removeBtn);
     card.appendChild(actions);
 
+    // 項目⑩追加: カードクリックで「レイアウト配置」用の選択をトグルする。オフラインのカードは
+    // 配置対象として意味を持たないため選択不可のままにする（見た目もcursor:pointerを付けない）。
+    if (!offline) {
+      card.classList.add('is-live-selectable');
+      const key = layoutChannelKey(item);
+      const selectedIdx = layoutSelectedOrder.indexOf(key);
+      if (selectedIdx !== -1) {
+        card.classList.add('is-layout-selected');
+        const badge = document.createElement('span');
+        badge.className = 'stream-check-card-layout-badge';
+        badge.textContent = LAYOUT_SLOT_LABELS[selectedIdx];
+        card.appendChild(badge);
+      }
+      card.addEventListener('click', (e) => {
+        // チェックボックス・＋追加/削除ボタンのクリックでは選択をトグルしない
+        // （「自動追加の対象にする」等、既存機能の操作と衝突させないためのガード）。
+        if (e.target.closest('input, button')) return;
+        toggleLayoutSelection(item);
+      });
+    }
+
     return card;
   }
 
+  /** 「レイアウト配置」用の選択をトグルする（layout-window.jsのカードclickハンドラと同じロジック）。 */
+  function toggleLayoutSelection(item) {
+    const key = layoutChannelKey(item);
+    const idx = layoutSelectedOrder.indexOf(key);
+    if (idx !== -1) {
+      // 既に選択済み → 選択解除（自動整列: 後続の番号が繰り上がる）
+      layoutSelectedOrder.splice(idx, 1);
+    } else if (layoutSelectedOrder.length >= LAYOUT_MAX_SLOTS) {
+      setStatus(`レイアウト配置に選べるのは最大${LAYOUT_MAX_SLOTS}件までです（解除してから選び直してください）`, true);
+      return;
+    } else {
+      layoutSelectedOrder.push(key);
+    }
+    render();
+  }
+
+  /** レイアウト配置ボタンのdisabled状態・選択件数表示を更新する。render()の末尾から呼ぶ。 */
+  function updateLayoutSelectionUI() {
+    layoutPlaceBtn.disabled = layoutSelectedOrder.length === 0;
+    layoutSelectionCountEl.textContent = layoutSelectedOrder.length
+      ? `レイアウト選択: ${layoutSelectedOrder.length}/${LAYOUT_MAX_SLOTS}件`
+      : '';
+  }
+
   function render() {
+    // 項目⑩追加: レイアウト選択の参照テーブルはプラットフォーム絞り込み前の全件から作る
+    // （フィルタで一時的に非表示のカードを選んでいても「レイアウト配置」実行時に情報を引けるように
+    // するため）。一覧から完全に消えた（オフライン化して非ピン留めのため除外された等）チャンネルの
+    // 選択だけは自動的に外す。オフライン化しただけで一覧に残っている間は選択を保持する
+    // （ユーザー確認済み: 復帰を待って配置したいケースを想定）。
+    const allKeys = new Set(unifiedFeedItems.map((item) => layoutChannelKey(item)));
+    layoutSelectedOrder = layoutSelectedOrder.filter((key) => allKeys.has(key));
+    layoutItemsByKey = new Map(unifiedFeedItems.map((item) => [layoutChannelKey(item), item]));
+
     const filtered = sortUnifiedFeedItems(
       unifiedFeedItems.filter((item) => platformFilter === 'all' || item.platform === platformFilter)
     );
@@ -362,9 +437,11 @@ document.addEventListener('DOMContentLoaded', () => {
       empty.className = 'stream-check-card-empty';
       empty.textContent = '現在配信中のフォロー配信者はいません';
       grid.appendChild(empty);
+      updateLayoutSelectionUI();
       return;
     }
     filtered.forEach((item) => grid.appendChild(buildCard(item)));
+    updateLayoutSelectionUI();
   }
 
   async function load(options = {}) {
@@ -496,6 +573,42 @@ document.addEventListener('DOMContentLoaded', () => {
   // ESCキー・OSの閉じるボタンはmain.js側（before-input-event / ウィンドウ標準の閉じるボタン）で
   // 処理される。こちらはヘッダーの×ボタン専用。
   closeBtn.addEventListener('click', () => window.streamCheckApi.closeWindow());
+
+  // 項目⑩追加: 「レイアウト配置」。選択順にmain.jsのapplyLayoutWindowArrange（複窓レイアウト設定
+  // ウィンドウの「自動整列」と全く同じ関数・IPC）を呼び、メイン画面のタイルを選択内容で置き換える。
+  // 既存タイルは全て閉じられる破壊的操作だが、layout-window側の「自動整列」ボタンと挙動を揃えるため
+  // 確認ダイアログは出さない（ユーザー確認済み）。チャット表示は「設定」タブの
+  // 「追加時にチャットを非表示にする」設定値をそのまま流用する（専用トグルは新設しない）。
+  layoutPlaceBtn.addEventListener('click', async () => {
+    if (!layoutSelectedOrder.length) return;
+    layoutPlaceBtn.disabled = true;
+    setStatus('レイアウトに反映中…', false);
+    try {
+      const selection = layoutSelectedOrder
+        .map((key) => layoutItemsByKey.get(key))
+        .filter(Boolean)
+        .map((item) => ({
+          platform: item.platform,
+          channel: item.channel,
+          // YouTubeはfetchUnifiedFeedのitem.channelがハンドル文字列そのもの
+          // （layout-window.jsの同箇所と同じ扱い）。
+          youtubeChannelId: item.platform === 'youtube' ? item.channel : null,
+        }));
+      const result = await window.streamCheckApi.layoutAutoArrange({
+        selection,
+        chatVisible: !addWithChatHiddenDefault,
+      });
+      if (!result || !result.ok) {
+        setStatus(`レイアウトへの反映に失敗しました: ${(result && result.error) || '不明なエラー'}`, true);
+        return;
+      }
+      setStatus(`${result.count}件をメイン画面のレイアウトに反映しました`, false);
+    } catch (err) {
+      setStatus(`レイアウトへの反映に失敗しました: ${String((err && err.message) || err)}`, true);
+    } finally {
+      layoutPlaceBtn.disabled = layoutSelectedOrder.length === 0;
+    }
+  });
 
   /**
    * @param {string} filter 'all'|'twitch'|'youtube'|'kick'

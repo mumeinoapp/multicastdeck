@@ -268,6 +268,44 @@ body {
   cursor: pointer;
 }
 
+/* 項目⑩追加: レイアウト選択（layout-window.jsの.is-selected/.layout-card-slot-badgeと同じ
+   ビジュアル言語）。「自動追加の対象にする」「常に表示（ピン留め）」（カード左側のチェックボックス）
+   とは完全に別のデータ・見た目のため、クラス名も衝突しないよう別プレフィックスにしてある。
+   選択中はクリック可能であることを示すためカーソルをpointerに、未選択（かつオフラインでない）
+   時もクリックで選択できることが分かるようポインタを出す。 */
+.stream-check-card.is-live-selectable {
+  cursor: pointer;
+}
+
+.stream-check-card.is-layout-selected {
+  border-color: #4f8cff;
+  box-shadow:
+    0 0 0 2px rgba(79, 140, 255, 0.55),
+    0 0 14px rgba(79, 140, 255, 0.22),
+    0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.stream-check-card-layout-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #0b0b0d;
+  background: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.stream-check-layout-selection-count {
+  font-size: 11px;
+  color: #a1a1aa;
+  white-space: nowrap;
+}
+
 .stream-check-card-avatar {
   width: 48px;
   height: 48px;

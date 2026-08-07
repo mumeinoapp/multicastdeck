@@ -35,6 +35,13 @@
   #stream-check-auto-tune-barを本タブのツールバー右側へ統合（id・中身のJSロジックは不変、
   親要素のみ移動）。チェックボックスの使い方説明を<details>で追加。新設「設定」タブに
   「追加時にチャットを非表示にする」トグルを追加した。
+
+  2026-08-08 項目⑩追加: 「配信中一覧」タブのカードをクリックして選択（最大9件、layout-window.js
+  と同じ番号バッジ方式）できるようにし、「レイアウト配置」ボタンを押すと選択順にメイン画面の
+  タイルへ反映される（既存タイルは全て閉じて置き換え、main.jsのapplyLayoutWindowArrange＝
+  複窓レイアウト設定ウィンドウの「自動整列」と全く同じロジック・IPCを再利用）。この選択状態は
+  「自動追加の対象にする」「常に表示（ピン留め）」チェックボックスとは完全に独立した別状態
+  （データ・見た目とも分離、詳細はstream-check-window.js参照）。
 -->
 <html lang="ja">
   <head>
@@ -81,6 +88,18 @@
             <button class="stream-check-window-filter-btn" data-platform="kick">Kick</button>
           </div>
           <div class="stream-check-window-toolbar-right">
+            <!-- 項目⑩追加: カードをクリックして選んだ配信（最大9件）をメイン画面のレイアウトへ
+                 一括反映する。選択件数はここに表示し、0件の間はボタンをdisabledにする。 -->
+            <span class="stream-check-layout-selection-count" id="stream-check-layout-selection-count"></span>
+            <button
+              type="button"
+              class="stream-check-window-refresh"
+              id="stream-check-layout-place-btn"
+              disabled
+              title="クリックして選択したカードを、複窓レイアウト設定と同じテンプレートでメイン画面に配置します（既存のタイルは全て閉じて置き換わります）"
+            >
+              📐 レイアウト配置
+            </button>
             <span class="stream-check-window-status" id="stream-check-status" role="status"></span>
             <button type="button" class="stream-check-window-refresh" id="stream-check-refresh-btn">🔄 更新</button>
             <span class="stream-check-window-updated-at" id="stream-check-updated-at"></span>

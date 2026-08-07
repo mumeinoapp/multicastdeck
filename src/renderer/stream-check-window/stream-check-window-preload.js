@@ -62,4 +62,9 @@ contextBridge.exposeInMainWorld('streamCheckApi', {
   // 段階F追加: 「設定」タブ、追加時にチャットを非表示にするトグルの永続化。
   getAddChatHiddenDefault: () => ipcRenderer.invoke('stream-check-window:get-add-chat-hidden-default'),
   setAddChatHiddenDefault: (value) => ipcRenderer.invoke('stream-check-window:set-add-chat-hidden-default', value),
+
+  // 項目⑩追加: 「レイアウト配置」ボタン用。複窓レイアウト設定ウィンドウ（layout-window-preload.js）
+  // のautoArrangeと完全に同じIPCチャンネル・引数形式（{selection, chatVisible}）をそのまま再利用する
+  // （main.js側のapplyLayoutWindowArrangeは呼び出し元ウィンドウを区別しない汎用実装のため）。
+  layoutAutoArrange: (payload) => ipcRenderer.invoke('layout-window:auto-arrange', payload),
 });

@@ -2215,6 +2215,10 @@ function applySharedLayout({ channels, layouts, chatHiddenList, platforms, youtu
  * 1枠目から順に割り当てる）。chatVisible: 選択チャンネル全体の一括チャット表示ON/OFF
  * （true=表示/false=非表示）。YouTube/Kickはチャット統合非対応のためこの設定を適用しても
  * addChannel側の強制非表示が優先される（従来通り）。
+ *
+ * 2026-08-08項目⑩追加: 呼び出し元ウィンドウを区別しない汎用実装のため、配信一覧ウィンドウ
+ * （stream-check-window、「レイアウト配置」ボタン）からも同じIPC(layout-window:auto-arrange)・
+ * この関数をそのまま呼び出している（stream-check-window-preload.jsのlayoutAutoArrange参照）。
  */
 function applyLayoutWindowArrange({ selection, chatVisible } = {}) {
   const list = Array.isArray(selection) ? selection.slice(0, 9) : [];
@@ -6450,6 +6454,9 @@ ipcMain.handle('layout-window:close', () => {
   return true;
 });
 // 段階2の選択(MAIN/SUBは廃止し1〜9の選択順に一本化)をメイン画面へ反映する「自動整列」ボタン用（段階3）。
+// 2026-08-08項目⑩追加: このハンドラは呼び出し元ウィンドウを区別しないため、配信一覧ウィンドウの
+// 「レイアウト配置」ボタン（stream-check-window-preload.jsのlayoutAutoArrange）からも同じチャンネル名で
+// そのまま呼ばれる。新規ハンドラの追加は不要。
 ipcMain.handle('layout-window:auto-arrange', (_e, payload) => applyLayoutWindowArrange(payload || {}));
 
 // ---- 配信チェックウィンドウ（2026-08-07新設、段階A） ----
