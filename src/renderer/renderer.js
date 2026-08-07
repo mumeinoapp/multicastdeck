@@ -1089,12 +1089,12 @@ async function openAccountLogin(platform) {
     emotesPanel,
     chatIntegrationPanel,
     document.getElementById('layout-share-panel'),
-    document.getElementById('unified-feed-modal'),
     document.getElementById('drops-hub-modal'),
   ].forEach((el) => el.classList.add('hidden'));
-  // 上でunified-feed-modalを直接hidden化する迂回経路のため、閉じるボタンを経由せず
-  // 自動更新タイマーが残存してしまわないよう、ここでも明示的に停止する
-  stopUnifiedFeedAutoTimer();
+  // 配信チェック（統一フィード）は2026-08-08にオーバーレイパネル基盤へ移植済み。開いていれば
+  // 閉じる（パネル側BrowserViewの取り外し・自動更新タイマーの停止はメインプロセス側と
+  // overlay-panel.js側で完結する）。
+  await window.api.closeOverlayPanel();
   await window.api.hideChatIntegrationTab();
   disconnectIrc();
   await window.api.closeAllSidePanels();
@@ -1221,95 +1221,31 @@ window.api.onDropsAutoError(({ gameName, message }) => {
 });
 
 // ---- Auto Tune-In（フォロー中配信者の自動タイル追加） ----
-// フォロー一覧の取得にはTwitchのユーザーOAuthトークン（user:read:followsスコープ）が必要なため、
-// Drops自動追加のClient Credentials（アプリ単位トークン）とは別に、個人アカウントとしての
-// 連携（認可コードグラントフロー）をこのパネルから開始できるようにしている。
+// 2026-08-08: 設定UI一式（連携状態の表示・連携/解除ボタン・有効化チェック・上限枠）は
+// 配信チェックパネルごとオーバーレイパネル基盤へ移植した
+// （src/renderer/overlay-panel/overlay-panel.js の mountUnifiedFeed 参照）。
+// メインウィンドウ側に残るのは、パネル側からは出来ない「TwitchのOAuth連携画面（アプリ内
+// BrowserView）を開いている間のヘッダーロックと『連携画面を閉じる』ボタンの出し入れ」だけ。
+// 開閉のきっかけは main.js が送る auto-tune-in:auth-view-opened / -closed 通知で受け取る。
 
-const autoTuneInStatusDot = document.getElementById('auto-tune-in-status-dot');
-const autoTuneInStatusEl = document.getElementById('auto-tune-in-status');
-const autoTuneInMessageEl = document.getElementById('auto-tune-in-message');
-const autoTuneInConnectBtn = document.getElementById('auto-tune-in-connect-btn');
-const autoTuneInDisconnectBtn = document.getElementById('auto-tune-in-disconnect-btn');
-const autoTuneInEnabledInput = document.getElementById('auto-tune-in-enabled-input');
-const autoTuneInMaxInput = document.getElementById('auto-tune-in-max-input');
 const twitchAuthCloseBtn = document.getElementById('twitch-auth-close-btn');
 
-async function refreshAutoTuneInStatus() {
-  const status = await window.api.getAutoTuneInStatus();
-  if (status.connected) {
-    autoTuneInStatusDot.className = 'status-dot connected';
-    // 設定画面のアカウント連携行（連携済み→サイト名の順）と表記を揃える。ユーザー名は表示しない。
-    autoTuneInStatusEl.textContent = '連携済み Twitch';
-    autoTuneInConnectBtn.classList.add('hidden');
-    autoTuneInDisconnectBtn.classList.remove('hidden');
-  } else {
-    autoTuneInStatusDot.className = 'status-dot disconnected';
-    autoTuneInStatusEl.textContent = '未連携 Twitch（YouTubeのみの場合は連携不要です）';
-    autoTuneInConnectBtn.classList.remove('hidden');
-    autoTuneInDisconnectBtn.classList.add('hidden');
-  }
-  // 有効化はTwitch連携済み、またはYouTube対象指定が1件以上あれば可能
-  // （YouTubeの配信中判定は公開ページ確認のためログイン・OAuth連携が不要）
-  autoTuneInEnabledInput.disabled = !status.canEnable;
-  autoTuneInMaxInput.disabled = !status.canEnable;
-  autoTuneInEnabledInput.checked = status.enabled;
-  autoTuneInMaxInput.value = status.maxTiles;
-}
-
-autoTuneInConnectBtn.addEventListener('click', async () => {
-  // OAuth連携画面はウィンドウ全幅で表示するため、開いているサイドパネル（フィード含む）は一旦閉じる
-  await window.api.closeAllSidePanels();
-  unifiedFeedModal.classList.add('hidden');
-  stopUnifiedFeedAutoTimer(); // OAuth連携中はフィードパネルを隠すため、自動更新タイマーも一旦停止する
+window.api.onTwitchAuthViewOpened(() => {
   twitchAuthCloseBtn.classList.remove('hidden');
   setHeaderLockedForLogin(true);
-  autoTuneInMessageEl.textContent = '連携処理中... 開いた画面でTwitchにログイン・認可してください。';
+});
 
-  const result = await window.api.startTwitchAuth();
-
+window.api.onTwitchAuthViewClosed(() => {
   twitchAuthCloseBtn.classList.add('hidden');
   setHeaderLockedForLogin(false);
-  await window.api.openSidePanel('unified-feed', 340);
-  unifiedFeedModal.classList.remove('hidden');
-  startUnifiedFeedAutoTimer(); // 連携完了後にフィードパネルを再表示するタイミングで自動更新を再開する
-
-  if (result.ok) {
-    autoTuneInMessageEl.textContent = `連携しました（${result.login}としてログイン中）`;
-  } else if (!result.cancelled) {
-    autoTuneInMessageEl.textContent = `エラー: ${result.error}`;
-  } else {
-    autoTuneInMessageEl.textContent = '';
-  }
-  refreshAutoTuneInStatus();
 });
 
 twitchAuthCloseBtn.addEventListener('click', async () => {
   await window.api.cancelTwitchAuth();
 });
 
-autoTuneInDisconnectBtn.addEventListener('click', async () => {
-  await window.api.disconnectTwitchAuth();
-  refreshAutoTuneInStatus();
-});
-
-autoTuneInEnabledInput.addEventListener('change', async () => {
-  await window.api.setAutoTuneInConfig({ enabled: autoTuneInEnabledInput.checked });
-  refreshChips();
-});
-
-autoTuneInMaxInput.addEventListener('change', async () => {
-  const v = Math.max(1, Math.min(20, Number(autoTuneInMaxInput.value) || 1));
-  autoTuneInMaxInput.value = v;
-  await window.api.setAutoTuneInConfig({ maxTiles: v });
-});
-
-window.api.onAutoTuneInError(({ message }) => {
-  if (!unifiedFeedModal.classList.contains('hidden')) autoTuneInMessageEl.textContent = `エラー: ${message}`;
-});
-
 window.api.onAutoTuneInAuthLost(() => {
   setStatusBanner('Twitchとの連携が切れました。「📡 フィード」パネルから再連携してください（フォロー配信者の自動追加は停止しています）。');
-  if (!unifiedFeedModal.classList.contains('hidden')) refreshAutoTuneInStatus();
 });
 
 // ---- Kickアカウント連携（OAuth 2.1 + PKCE） ----
@@ -1497,334 +1433,26 @@ window.api.onZappingError(({ message }) => {
   zappingStatus.textContent = `エラー: ${message}`;
 });
 
-// ---- プラットフォーム横断の統一フィード（ロードマップ項目6） ----
-// フォロー中/登録中で現在配信中の配信者だけを一覧表示する。自動追加はせず「＋追加」クリックのみ。
-// 常時ポーリングはせず、パネルを開いた時・「🔄 更新」ボタン押下時のみメインプロセスへ問い合わせる。
+// ---- プラットフォーム横断の統一フィード（配信チェック、ロードマップ項目6） ----
+// 2026-08-08: パネルの中身（配信中一覧のカード表示・自動追加の対象選択・フォロー配信者の
+// 自動追加設定）は、まるごと汎用オーバーレイパネル基盤へ移植した
+// （src/renderer/overlay-panel/{index.html,overlay-panel.js,overlay-panel.css}）。
+// 旧方式は openSidePanel('unified-feed', 340) で配信タイルの幅を縮めて隙間を空けるサイドパネル
+// だったが、現在は配信タイルを一切縮めない・消さない専用BrowserViewのオーバーレイになっている。
+// メインウィンドウ側に残るのはヘッダーボタンとPro機能ガードのみ。
 
 const unifiedFeedBtn = document.getElementById('unified-feed-btn');
-const unifiedFeedModal = document.getElementById('unified-feed-modal');
-const unifiedFeedCloseBtn = document.getElementById('unified-feed-close-btn');
-const unifiedFeedRefreshBtn = document.getElementById('unified-feed-refresh-btn');
-const unifiedFeedUpdatedAt = document.getElementById('unified-feed-updated-at');
-const unifiedFeedStatus = document.getElementById('unified-feed-status');
-const unifiedFeedList = document.getElementById('unified-feed-list');
-const unifiedFeedFilterBtns = Array.from(document.querySelectorAll('.unified-feed-filter-btn'));
-
-let unifiedFeedItems = [];
-let unifiedFeedPlatformFilter = 'all';
-
-/**
- * Auto Tune-Inの対象指定リストへのチェックボックスON/OFFを反映する。
- * 現在値をメインプロセスから取り直してから編集・保存するため、フィード一覧・全一覧のどちらから
- * 操作しても矛盾なく反映される（多少IPC呼び出しは増えるがチェック操作は頻繁ではないため許容）。
- */
-async function toggleAutoTuneInTarget(platform, channel, checked) {
-  const key = channel.toLowerCase();
-  const current = await window.api.getAutoTuneInTargets();
-  const next = checked
-    ? current.some((t) => t.platform === platform && t.channel.toLowerCase() === key)
-      ? current
-      : [...current, { platform, channel }]
-    : current.filter((t) => !(t.platform === platform && t.channel.toLowerCase() === key));
-  await window.api.setAutoTuneInTargets(next);
-}
-
-/** フィード一覧・全一覧のどちらかでチェックが変わったら、もう一方に同じチャンネルがあれば見た目も同期する */
-function syncTargetCheckboxAcrossLists(platform, channel, checked) {
-  const key = channel.toLowerCase();
-  const feedItem = unifiedFeedItems.find((f) => f.platform === platform && f.channel.toLowerCase() === key);
-  if (feedItem && feedItem.isTarget !== checked) {
-    feedItem.isTarget = checked;
-    renderUnifiedFeedList();
-  }
-  const allItem = allFollowCandidates.find((f) => f.platform === platform && f.channel.toLowerCase() === key);
-  if (allItem && allItem.isTarget !== checked) {
-    allItem.isTarget = checked;
-    renderAllFollowList();
-  }
-}
-
-/**
- * フィードへの「常時表示（ピン留め）」ON/OFFを反映する。自動追加の対象指定とは完全に独立した
- * 別のリストで、YouTube専用（Twitchはもともと「フォロー中なら誰でも」がデフォルトでフィードに
- * 出るためピン留めの必要性が薄い）。
- */
-async function toggleFeedPin(channel, displayName, checked) {
-  const key = channel.toLowerCase();
-  const current = await window.api.getFeedPinnedYoutube();
-  const next = checked
-    ? current.some((p) => p.channel.toLowerCase() === key)
-      ? current
-      : [...current, { channel, displayName }]
-    : current.filter((p) => p.channel.toLowerCase() !== key);
-  await window.api.setFeedPinnedYoutube(next);
-}
-
-/**
- * フィード一覧・全一覧のどちらかでピン留めが変わったら、もう一方に同じチャンネルがあれば見た目も同期する。
- * ピン留めを外した非配信中チャンネルは、厳密には次の「🔄 更新」でフィードから消えるが、
- * その場ですぐ違和感が出ないよう表示上も「offline」扱いのままにしておく（誤操作で急に消えないようにする狙いもある）。
- */
-function syncPinCheckboxAcrossLists(channel, checked) {
-  const key = channel.toLowerCase();
-  const feedItem = unifiedFeedItems.find((f) => f.platform === 'youtube' && f.channel.toLowerCase() === key);
-  if (feedItem && feedItem.isPinned !== checked) feedItem.isPinned = checked;
-  const allItem = allFollowCandidates.find((f) => f.platform === 'youtube' && f.channel.toLowerCase() === key);
-  if (allItem && allItem.isPinned !== checked) allItem.isPinned = checked;
-}
-
-/**
- * 「自動追加の対象にする」チェックボックスのtitle（ホバー時の詳細説明）。
- * インライン注記は「使い方/注記」参照に短縮したため、実際の詳細はここでの
- * ホバー説明と使い方/注記モーダル側にのみ持たせている。
- */
-function autoTuneInTargetTitle(platform) {
-  return platform === 'youtube'
-    ? '自動追加の対象にする（YouTubeはチェックを付けないと自動追加されません）'
-    : '自動追加の対象にする（チェックした配信者のみが対象になります）';
-}
-
-/** プラットフォームバッジのHTML。YouTubeは公式カラーの赤にするため絵文字ではなくCSS着色のアイコンを使う。 */
-function platformBadgeHtml(platform) {
-  if (platform === 'youtube') return '<span class="unified-feed-platform-badge youtube">▶</span>';
-  if (platform === 'kick') return '<span class="unified-feed-platform-badge kick">K</span>';
-  return '<span class="unified-feed-platform-badge twitch">●</span>';
-}
-
-function renderUnifiedFeedList() {
-  unifiedFeedList.innerHTML = '';
-  const filtered = unifiedFeedItems.filter(
-    (item) => unifiedFeedPlatformFilter === 'all' || item.platform === unifiedFeedPlatformFilter
-  );
-  if (!filtered.length) {
-    unifiedFeedList.innerHTML = '<div class="note">現在配信中のフォロー配信者はいません</div>';
-    return;
-  }
-  filtered.forEach((item) => {
-    const row = document.createElement('div');
-    const offline = item.isPinned && !item.isLive;
-    row.className = `unified-feed-row${item.alreadyAdded ? ' already-added' : ''}${offline ? ' offline' : ''}`;
-    const viewers = offline
-      ? 'オフライン'
-      : typeof item.viewerCount === 'number'
-      ? `${item.viewerCount.toLocaleString()}人`
-      : '';
-    // ピン留めチェックボックスはYouTube専用（Twitchはもともと「フォロー中なら誰でも」がデフォルトでフィードに出るため対象外）
-    const pinHtml =
-      item.platform === 'youtube'
-        ? `<input type="checkbox" class="unified-feed-pin-checkbox" ${item.isPinned ? 'checked' : ''} title="常に表示（ピン留め、オンライン/オフライン問わず自分で外すまで表示し続ける）" />`
-        : '<span class="unified-feed-pin-spacer"></span>';
-    // 自動追加（Auto Tune-In）対象指定チェックボックスはTwitch/YouTube専用。
-    // KickはAuto Tune-In自体が未対応（60秒間隔の常時ポーリングをKickに対して行う重さ・Bot対策リスクを
-    // 避けるため）なので、チェックボックスを出さず単なる余白にする。
-    const targetHtml =
-      item.platform === 'kick'
-        ? '<span class="unified-feed-target-spacer"></span>'
-        : `<input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="${autoTuneInTargetTitle(item.platform)}" />`;
-    row.innerHTML = `
-      ${targetHtml}
-      ${pinHtml}
-      ${platformBadgeHtml(item.platform)}
-      <span class="unified-feed-name">${escapeHtml(item.displayName)}</span>
-      <span class="unified-feed-viewers">${viewers}</span>
-      <button class="unified-feed-add-btn" ${item.alreadyAdded || offline ? 'disabled' : ''}>${
-      item.alreadyAdded ? '表示中' : offline ? 'オフライン' : '＋追加'
-    }</button>
-    `;
-    const targetCheckbox = row.querySelector('.unified-feed-target-checkbox');
-    if (targetCheckbox) {
-      targetCheckbox.addEventListener('change', async (e) => {
-        const checked = e.target.checked;
-        item.isTarget = checked;
-        await toggleAutoTuneInTarget(item.platform, item.channel, checked);
-        renderUnifiedFeedList();
-        syncTargetCheckboxAcrossLists(item.platform, item.channel, checked);
-        refreshAutoTuneInStatus();
-      });
-    }
-    const pinCheckbox = row.querySelector('.unified-feed-pin-checkbox');
-    if (pinCheckbox) {
-      pinCheckbox.addEventListener('change', async (e) => {
-        const checked = e.target.checked;
-        item.isPinned = checked;
-        await toggleFeedPin(item.channel, item.displayName, checked);
-        renderUnifiedFeedList();
-        syncPinCheckboxAcrossLists(item.channel, checked);
-      });
-    }
-    row.querySelector('.unified-feed-add-btn').addEventListener('click', async () => {
-      if (offline) return;
-      const result = await window.api.addChannel(item.channel, item.platform);
-      if (!result || !result.ok) {
-        unifiedFeedStatus.textContent = `追加に失敗しました: ${result ? result.error : '不明なエラー'}`;
-        return;
-      }
-      item.alreadyAdded = true;
-      renderUnifiedFeedList();
-      refreshChips();
-    });
-    unifiedFeedList.appendChild(row);
-  });
-}
-
-// ---- 自動追加の対象を選ぶ（全フォロー/登録一覧、オンライン・オフライン問わず） ----
-// フィード一覧と違い配信中判定をしないため取得が軽く済むが、それでもYouTubeはページ読み込みが
-// 発生するため、専用の「読み込む」ボタン押下時のみ取得する（パネルを開くだけでは自動取得しない）。
-
-const autoTuneInLoadAllBtn = document.getElementById('auto-tune-in-load-all-btn');
-const autoTuneInAllStatus = document.getElementById('auto-tune-in-all-status');
-const autoTuneInAllList = document.getElementById('auto-tune-in-all-list');
-
-let allFollowCandidates = [];
-
-function renderAllFollowList() {
-  autoTuneInAllList.innerHTML = '';
-  if (!allFollowCandidates.length) return;
-  allFollowCandidates.forEach((item) => {
-    const row = document.createElement('div');
-    row.className = 'unified-feed-row';
-    const pinHtml =
-      item.platform === 'youtube'
-        ? `<input type="checkbox" class="unified-feed-pin-checkbox" ${item.isPinned ? 'checked' : ''} title="常に表示（ピン留め、オンライン/オフライン問わず自分で外すまで表示し続ける）" />`
-        : '<span class="unified-feed-pin-spacer"></span>';
-    row.innerHTML = `
-      <input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="${autoTuneInTargetTitle(item.platform)}" />
-      ${pinHtml}
-      ${platformBadgeHtml(item.platform)}
-      <span class="unified-feed-name">${escapeHtml(item.displayName)}</span>
-    `;
-    row.querySelector('.unified-feed-target-checkbox').addEventListener('change', async (e) => {
-      const checked = e.target.checked;
-      item.isTarget = checked;
-      await toggleAutoTuneInTarget(item.platform, item.channel, checked);
-      syncTargetCheckboxAcrossLists(item.platform, item.channel, checked);
-      refreshAutoTuneInStatus();
-    });
-    const pinCheckbox = row.querySelector('.unified-feed-pin-checkbox');
-    if (pinCheckbox) {
-      pinCheckbox.addEventListener('change', async (e) => {
-        const checked = e.target.checked;
-        item.isPinned = checked;
-        await toggleFeedPin(item.channel, item.displayName, checked);
-        syncPinCheckboxAcrossLists(item.channel, checked);
-      });
-    }
-    autoTuneInAllList.appendChild(row);
-  });
-}
-
-autoTuneInLoadAllBtn.addEventListener('click', async () => {
-  autoTuneInAllStatus.textContent = '取得中...(フォロー/登録一覧を読み込みます。登録数が多いと時間がかかることがあります)';
-  autoTuneInLoadAllBtn.disabled = true;
-  try {
-    const { items, errors } = await window.api.fetchAllFollowCandidates();
-    allFollowCandidates = items;
-    renderAllFollowList();
-    const errMessages = [];
-    if (errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
-    if (errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
-    autoTuneInAllStatus.textContent = errMessages.join(' / ') || `${items.length}件取得しました`;
-  } catch (err) {
-    autoTuneInAllStatus.textContent = `取得に失敗しました: ${err.message || err}`;
-  } finally {
-    autoTuneInLoadAllBtn.disabled = false;
-  }
-});
-
-// パネルを開いている間、Twitch/YouTube分だけを短い間隔で自動更新する（「チャンネルの一覧更新を
-// もっと早く更新できるようにする」要望への対応）。Kick分はBrowserViewフルロードを伴い重いため
-// 自動更新の対象からは外し、パネルを開いた直後の初回取得・手動更新ボタン押下時のみ取得する。
-// includeKick=falseで取得した際は、直前まで表示していたKick分の結果をそのまま引き継ぐ
-// （自動更新のたびにKickの行が消えたり復活したりするチラつきを防ぐため）。
-const UNIFIED_FEED_AUTO_REFRESH_MS = 20 * 1000;
-let unifiedFeedAutoTimer = null;
-
-/**
- * フィードパネルを開いた際に自動更新タイマーを起動する。既存タイマーがあれば必ず一度停止してから
- * 張り直す（多重登録防止）。パネルが実際に閉じている状態で誤って呼ばれても実害は無いが、
- * 呼び出し側は基本的に「パネルを開く/再表示する」タイミングでのみ呼ぶこと。
- */
-function startUnifiedFeedAutoTimer() {
-  stopUnifiedFeedAutoTimer();
-  unifiedFeedAutoTimer = setInterval(() => refreshUnifiedFeed({ includeKick: false }), UNIFIED_FEED_AUTO_REFRESH_MS);
-}
-
-/**
- * フィードパネルを閉じる（隠す）すべての経路で必ず呼ぶこと。関数化しているのは、フィードパネルには
- * 専用の閉じるボタン以外にも「別の全幅画面（アカウントログイン・Twitch OAuth連携）を開くために
- * 一旦hiddenクラスを直接付与する」という迂回経路が複数あり、各所で個別にclearIntervalを書くと
- * 呼び忘れが起きやすいため。
- */
-function stopUnifiedFeedAutoTimer() {
-  if (unifiedFeedAutoTimer) {
-    clearInterval(unifiedFeedAutoTimer);
-    unifiedFeedAutoTimer = null;
-  }
-}
-
-async function refreshUnifiedFeed(options = {}) {
-  const includeKick = options.includeKick !== false;
-  unifiedFeedStatus.textContent = '取得中...';
-  unifiedFeedRefreshBtn.disabled = true;
-  try {
-    const { items, errors } = await window.api.fetchUnifiedFeed({ includeKick });
-    if (includeKick) {
-      unifiedFeedItems = items;
-    } else {
-      const previousKickItems = unifiedFeedItems.filter((item) => item.platform === 'kick');
-      unifiedFeedItems = items.concat(previousKickItems);
-    }
-    renderUnifiedFeedList();
-    const errMessages = [];
-    if (errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
-    if (errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
-    if (includeKick && errors.kick) errMessages.push(`Kick: ${errors.kick}`);
-    unifiedFeedStatus.textContent = errMessages.join(' / ');
-    unifiedFeedUpdatedAt.textContent = `最終更新: ${new Date().toLocaleTimeString('ja-JP')}`;
-  } catch (err) {
-    unifiedFeedStatus.textContent = `取得に失敗しました: ${err.message || err}`;
-  } finally {
-    unifiedFeedRefreshBtn.disabled = false;
-  }
-}
 
 unifiedFeedBtn.addEventListener('click', async () => {
   if (!premiumUnlocked) { showPremiumLockedModal(); return; }
-  if (!unifiedFeedModal.classList.contains('hidden')) {
-    unifiedFeedCloseBtn.click();
+  // 旧サイドパネル方式と同じく、開いている時にもう一度押したら閉じる（トグル）。
+  if (overlayPanelOpenId === 'unified-feed') {
+    await window.api.closeOverlayPanel();
     return;
   }
-  await window.api.openSidePanel('unified-feed', 340);
-  unifiedFeedModal.classList.remove('hidden');
-  refreshUnifiedFeed();
-  refreshAutoTuneInStatus();
-  startUnifiedFeedAutoTimer();
-});
-
-unifiedFeedCloseBtn.addEventListener('click', async () => {
-  unifiedFeedModal.classList.add('hidden');
-  await window.api.closeSidePanel('unified-feed');
-  stopUnifiedFeedAutoTimer();
-});
-
-unifiedFeedRefreshBtn.addEventListener('click', () => refreshUnifiedFeed());
-
-/**
- * @param {string} filter 'all'|'twitch'|'youtube'|'kick'
- * @param {boolean} [persist=true] falseを渡すと保存済み設定の復元時などstore書き込みを省略する
- */
-function setUnifiedFeedPlatformFilter(filter, persist = true) {
-  unifiedFeedPlatformFilter = filter;
-  unifiedFeedFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.platform === filter));
-  // #8対応: 再起動後も選択中の絞り込みを維持できるよう永続化する。
-  if (persist) window.api.setAllSettings({ unifiedFeedPlatformFilter: filter });
-}
-
-unifiedFeedFilterBtns.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    setUnifiedFeedPlatformFilter(btn.dataset.platform);
-    renderUnifiedFeedList();
-  });
+  // クリック起点なので、必ずopenOverlayPanelSafe経由で開く（同じクリックがdocumentまで
+  // バブリングして「外側クリック閉じ」に引っかかるのを防ぐ。定義箇所のコメント参照）。
+  await openOverlayPanelSafe('unified-feed');
 });
 
 // ---- 音量ミキサー（ストリームごとの個別音量調整） ----
@@ -2813,7 +2441,8 @@ const SIDE_PANEL_ELEMENTS = {
   emotes: emotesPanel,
   'chat-integration': chatIntegrationPanel,
   'layout-share': layoutSharePanel,
-  'unified-feed': unifiedFeedModal,
+  // 'unified-feed'（配信チェック）は2026-08-08にオーバーレイパネル基盤へ移植したため、
+  // openSidePanel系のスタック管理対象からは外れている。
   'drops-hub': dropsHubModal,
 };
 
@@ -2845,6 +2474,11 @@ window.api.onOverlayPanelChanged(({ openId }) => {
 // openOverlayPanel→IPC往復→onOverlayPanelChangedの反映は非同期のため、このリスナーが
 // 同期的に評価される時点ではoverlayPanelOpenIdはまだ更新されておらず、開いた直後に
 // 誤って閉じてしまうことはない。
+// 配信チェック等のドッキング型パネルは、旧サイドパネル方式と同じく「閉じるボタン/Escape/
+// ヘッダーボタンの再クリックでのみ閉じる」挙動を維持する（画面右端に常駐させたまま、ヘッダーの
+// 他ボタンを操作できるようにするため）。外側クリックで閉じるのはcentered系モーダルのみ。
+const OVERLAY_PANEL_DOCKED_IDS = new Set(['unified-feed']);
+
 document.addEventListener('click', () => {
   if (suppressNextOutsideClick) {
     // 別のオーバーレイパネルを開くボタン自身のクリックだった場合はここで消費するだけで、
@@ -2853,6 +2487,7 @@ document.addEventListener('click', () => {
     return;
   }
   if (!overlayPanelOpenId) return;
+  if (OVERLAY_PANEL_DOCKED_IDS.has(overlayPanelOpenId)) return;
   window.api.closeOverlayPanel();
 });
 
@@ -2871,6 +2506,13 @@ function setStatusBanner(text) {
 // （通常は同時に1つしか開かない設計だが、念のため順序を決めておく）。
 // 各パネル既存の「閉じる」ボタンをクリックしたのと同じ状態に揃えたいので、実際にボタンをクリックする。
 function closeTopmostPanelWithEscape() {
+  // TwitchのOAuth連携画面は、配信チェックパネル（オーバーレイパネル）より後にaddBrowserViewされる
+  // ぶん常に前面かつ全面を覆う。よってオーバーレイパネルより先に判定し、Escapeでは連携のキャンセルを
+  // 優先する（先にパネルを閉じてしまうと、連携結果を待っているパネル側のJSごと破棄されてしまう）。
+  if (!twitchAuthCloseBtn.classList.contains('hidden')) {
+    twitchAuthCloseBtn.click();
+    return;
+  }
   // 汎用オーバーレイパネル（#16向け）はBrowserView最前面表示のため、開いていれば最優先で閉じる。
   if (overlayPanelOpenId) {
     window.api.closeOverlayPanel();
@@ -2888,20 +2530,12 @@ function closeTopmostPanelWithEscape() {
     accountLoginCloseBtn.click();
     return;
   }
-  if (!twitchAuthCloseBtn.classList.contains('hidden')) {
-    twitchAuthCloseBtn.click();
-    return;
-  }
   if (!settingsModal.classList.contains('hidden')) {
     settingsCloseBtn.click();
     return;
   }
   if (!zappingModal.classList.contains('hidden')) {
     zappingCloseBtn.click();
-    return;
-  }
-  if (!unifiedFeedModal.classList.contains('hidden')) {
-    unifiedFeedCloseBtn.click();
     return;
   }
   if (!dropsHubModal.classList.contains('hidden')) {
@@ -2941,7 +2575,7 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   refreshChips();
   await restoreActionButtonOrder();
   setupActionButtonsDragReorder();
-  // #8対応: 全タブ統合チャットの表示モード・統一フィードの絞り込みを、保存済みの値から復元する
+  // #8対応: 全タブ統合チャットの表示モードを、保存済みの値から復元する
   // （persist=falseで、読み込んだ値をそのまま書き戻す無駄なIPCを避ける）。
   // 「時系列統合」モードはPro限定機能（chatIntegrationModeTimelineBtnのクリックハンドラでのみ
   // premiumUnlockedを判定してガードしている）。保存時はProだったが、その後Pro状態が失効した
@@ -2951,7 +2585,8 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   const [s, isPremium] = await Promise.all([window.api.getAllSettings(), window.api.getPremiumUnlocked()]);
   const restoredChatMode = s.chatIntegrationMode === 'timeline' && isPremium ? 'timeline' : 'tab';
   setChatIntegrationMode(restoredChatMode, false);
-  setUnifiedFeedPlatformFilter(s.unifiedFeedPlatformFilter || 'all', false);
+  // 統一フィードの絞り込みの復元は、パネル自体がオーバーレイパネル側へ移った2026-08-08以降、
+  // パネルを開いたタイミングでoverlay-panel.js側が行う（#8対応の永続化先のstoreキーは同じ）。
 })();
 
 // ---- 自作メニューバー（ファイル/表示/ヘルプ/バージョン） ----

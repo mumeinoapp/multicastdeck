@@ -374,6 +374,16 @@ let overlayPanelOpenId = null;
 
 const OVERLAY_PANEL_DEFAULT_WIDTH = 360;
 
+// ドッキング型（非centered）オーバーレイパネルのうち、既定幅では狭すぎるものだけを個別に指定する。
+// 'unified-feed'（配信チェック）は2026-08-08にカード表示化し、アバター画像＋2種類のチェックボックス
+// ＋配信者名＋視聴者数＋追加ボタンを1行に収める必要があるため420pxにしている。
+const OVERLAY_PANEL_WIDTHS = { 'unified-feed': 420 };
+
+// overlayPanelView（オーバーレイパネル用BrowserView）にも中継する必要があるpush通知チャンネル。
+// notifyRenderer()はメインウィンドウにしか送らないため、パネル側UIが購読しているものだけを
+// ここに列挙して二重送信する（無関係な高頻度チャンネルまで中継しないよう最小限に留める）。
+const OVERLAY_PANEL_FORWARDED_CHANNELS = new Set(['auto-tune-in:error', 'auto-tune-in:auth-lost']);
+
 // フィードバックモーダルの下書き（件名・本文）。centered化に伴い外側クリックでも閉じられる
 // ようになったため、閉じる＝入力内容の消失にならないよう、BrowserView自体は
 // closeOverlayPanel()でabout:blankへ遷移し中身を破棄するが、メインプロセス側にこの下書きを
@@ -437,7 +447,7 @@ function relayoutOverlayPanel() {
     });
     return;
   }
-  const panelWidth = Math.min(OVERLAY_PANEL_DEFAULT_WIDTH, width);
+  const panelWidth = Math.min(OVERLAY_PANEL_WIDTHS[overlayPanelOpenId] || OVERLAY_PANEL_DEFAULT_WIDTH, width);
   overlayPanelView.setBounds({
     x: width - panelWidth,
     y: HEADER_HEIGHT,
@@ -1663,6 +1673,17 @@ function notifyRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload);
   }
+  // オーバーレイパネル（配信チェック等）へ移植したUIも同じ通知を必要とするため、
+  // 明示的に列挙したチャンネルだけパネル側BrowserViewにも中継する（OVERLAY_PANEL_FORWARDED_CHANNELS参照）。
+  if (overlayPanelOpenId && overlayPanelView && OVERLAY_PANEL_FORWARDED_CHANNELS.has(channel)) {
+    try {
+      if (!overlayPanelView.webContents.isDestroyed()) {
+        overlayPanelView.webContents.send(channel, payload);
+      }
+    } catch (_) {
+      /* パネルが閉じられた直後などは無視（通知は装飾的なもので、失敗しても本処理に影響させない） */
+    }
+  }
 }
 
 /**
@@ -2866,13 +2887,28 @@ async function scrapeYoutubeSubscribedChannels() {
         var seen = {};
         var result = [];
         items.forEach(function (el) {
-          var link = el.querySelector('#main-link') || el.querySelector('a[href^="/@"], a[href^="/channel/"]');
-          var nameEl = el.querySelector('#channel-title') || el.querySelector('#text');
-          var href = link ? link.getAttribute('href') : null;
-          var name = nameEl ? nameEl.textContent.trim() : null;
-          if (!href || !name || seen[href]) return;
-          seen[href] = true;
-          result.push({ href: href, name: name });
+          try {
+            var link = el.querySelector('#main-link') || el.querySelector('a[href^="/@"], a[href^="/channel/"]');
+            var nameEl = el.querySelector('#channel-title') || el.querySelector('#text');
+            var href = link ? link.getAttribute('href') : null;
+            var name = nameEl ? nameEl.textContent.trim() : null;
+            if (!href || !name || seen[href]) return;
+            seen[href] = true;
+            // アバター画像（配信チェックパネルのカード表示用、2026-08-08追加）。
+            // YouTube側は遅延読み込みのため、src が空/1x1プレースホルダのことがある。その場合は
+            // data-src へフォールバックする。取れなければ null のままにする（装飾要素なので
+            // 取得できなくても一覧取得自体は成功扱い）。
+            var avatarEl = el.querySelector('#avatar img, yt-img-shadow img, img');
+            var avatarUrl = null;
+            if (avatarEl) {
+              var src = avatarEl.src || '';
+              if (!src || src.indexOf('data:image/gif') === 0) src = avatarEl.getAttribute('data-src') || '';
+              avatarUrl = src || null;
+            }
+            result.push({ href: href, name: name, avatarUrl: avatarUrl });
+          } catch (e) {
+            /* 1要素の解析失敗で一覧全体を落とさない */
+          }
         });
         return result;
       })();
@@ -2885,7 +2921,7 @@ async function scrapeYoutubeSubscribedChannels() {
         let handle = null;
         if (href.startsWith('/@')) handle = href.slice(1); // "@xxx" の形のまま（addChannelの既存ハンドル形式と一致）
         else if (href.startsWith('/channel/')) handle = href.replace('/channel/', ''); // "UC..." チャンネルID
-        return handle ? { handle, name: item.name } : null;
+        return handle ? { handle, name: item.name, avatarUrl: item.avatarUrl || null } : null;
       })
       .filter(Boolean);
   } catch (err) {
@@ -2947,6 +2983,7 @@ async function fetchUnifiedFeed(options = {}) {
             channel: s.login,
             displayName: s.login,
             viewerCount: s.viewerCount,
+            avatarUrl: s.avatarUrl || null,
             alreadyAdded: streamViews.has(s.login),
             isTarget: isAutoTuneInTarget('twitch', s.login),
             isPinned: false,
@@ -2977,6 +3014,7 @@ async function fetchUnifiedFeed(options = {}) {
               channel: sub.handle,
               displayName: sub.name,
               viewerCount: null,
+              avatarUrl: sub.avatarUrl || null,
               alreadyAdded: true,
               isTarget: isAutoTuneInTarget('youtube', sub.handle),
               isPinned: false,
@@ -2991,6 +3029,7 @@ async function fetchUnifiedFeed(options = {}) {
               channel: sub.handle,
               displayName: sub.name,
               viewerCount: null,
+              avatarUrl: sub.avatarUrl || null,
               alreadyAdded: false,
               isTarget: isAutoTuneInTarget('youtube', sub.handle),
               isPinned: false,
@@ -3008,6 +3047,8 @@ async function fetchUnifiedFeed(options = {}) {
         await mapWithConcurrency(pinned, UNIFIED_FEED_YOUTUBE_CONCURRENCY, async (p) => {
           const alreadyAdded = hasYoutubeChannel(p.channel);
           const displayName = subsByHandle.get(p.channel.toLowerCase())?.name || p.displayName;
+          // ピン留め分は保存データに画像を持っていないため、現在の登録一覧から拾えた時だけアバターを付ける
+          const avatarUrl = subsByHandle.get(p.channel.toLowerCase())?.avatarUrl || null;
           let isLive = alreadyAdded;
           if (!alreadyAdded) {
             try {
@@ -3022,6 +3063,7 @@ async function fetchUnifiedFeed(options = {}) {
             channel: p.channel,
             displayName,
             viewerCount: null,
+            avatarUrl,
             alreadyAdded,
             isTarget: isAutoTuneInTarget('youtube', p.channel),
             isPinned: true,
@@ -3044,6 +3086,7 @@ async function fetchUnifiedFeed(options = {}) {
               channel: s.channel,
               displayName: s.displayName,
               viewerCount: s.viewerCount,
+              avatarUrl: s.avatarUrl || null,
               alreadyAdded: streamViews.has(s.channel),
               // KickはAuto Tune-In自体が未対応（60秒間隔ポーリングの重さ・Bot対策リスクを避けるため）。
               // 対象指定チェックボックスはTwitch/YouTube専用のためisTargetは常にfalse固定でよい。
@@ -3058,10 +3101,11 @@ async function fetchUnifiedFeed(options = {}) {
     })(),
   ]);
 
-  // 表示順: 対象指定（自動追加チェック済み）を最優先、次にオンライン/オフライン、
-  // 同条件内では視聴者数順（YouTubeは視聴者数が取れないためnull=0扱い）。
+  // 表示順: まずオンライン（配信中）を上に、その中では視聴者数の多い順
+  // （YouTubeは視聴者数が取れないためnull=0扱い）。
+  // 2026-08-08のカード表示化に伴い、旧仕様にあった「対象指定（自動追加チェック済み）を最優先」の
+  // 並び替えは廃止した（チェックの有無で一覧の並びが入れ替わり分かりにくかったため）。
   items.sort((a, b) => {
-    if (a.isTarget !== b.isTarget) return a.isTarget ? -1 : 1;
     if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
     return (b.viewerCount || 0) - (a.viewerCount || 0);
   });
@@ -3101,6 +3145,7 @@ async function fetchAllFollowCandidates() {
             platform: 'youtube',
             channel: sub.handle,
             displayName: sub.name,
+            avatarUrl: sub.avatarUrl || null,
             isTarget: isAutoTuneInTarget('youtube', sub.handle),
             isPinned: isFeedPinnedYoutube(sub.handle),
           });
@@ -3635,6 +3680,10 @@ function openTwitchAuthView(url) {
     if (isBenignNavigationError(err)) return;
   });
   relayoutTwitchAuthView();
+  // 2026-08-08追加: 連携開始ボタンが「配信チェック」パネル（overlayPanelView側のHTML）へ
+  // 移ったため、メインウィンドウ側のヘッダーロック・「連携画面を閉じる」ボタンの出し入れは
+  // レンダラーのクリックハンドラではなくこの通知で行う（旧: renderer.js側で直接切り替えていた）。
+  notifyRenderer('auto-tune-in:auth-view-opened');
 }
 
 function relayoutTwitchAuthView() {
@@ -3658,6 +3707,18 @@ function closeTwitchAuthView() {
   }
   scheduleWebContentsDestroy(view.webContents);
   twitchAuthView = null;
+  // 連携画面は addBrowserView で後から積んだぶん overlayPanelView より前面に来ているため、
+  // 閉じたあとはオーバーレイパネル（配信チェック等）を確実に最前面へ戻す。
+  // なおパネル自体は連携中も閉じていない（閉じるとabout:blankへ遷移してJSごと破棄され、
+  // startTwitchAuth()のawaitが結果を受け取れなくなるため）。
+  if (overlayPanelOpenId && overlayPanelView && mainWindow && typeof mainWindow.setTopBrowserView === 'function') {
+    try {
+      mainWindow.setTopBrowserView(overlayPanelView);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  notifyRenderer('auto-tune-in:auth-view-closed');
 }
 
 /** 認可コードをアクセストークン・リフレッシュトークンに交換し、ユーザー情報を取得して保存する */
@@ -3965,7 +4026,24 @@ function normalizeKickFollowedChannel(raw) {
   );
   const viewerCount =
     Number(raw.viewer_count ?? channelObj.viewer_count ?? (livestream && livestream.viewer_count) ?? 0) || 0;
-  return { channel: String(slug), displayName: String(displayName), isLive, viewerCount };
+  // アバター画像（配信チェックパネルのカード表示用、2026-08-08追加）。
+  // この関数の他の項目と同様、Kick側のレスポンス形式は非公開のため候補パスを順に試すだけの
+  // リバースエンジニアリング実装で、実レスポンスでの検証はできていない（null が返ることも普通にある）。
+  // 表示側（overlay-panel.js）は avatarUrl が null / 読み込み失敗でもフォールバック画像を出すため実害はない。
+  let avatarUrl = null;
+  try {
+    avatarUrl =
+      raw.user?.profile_pic ||
+      raw.profile_pic ||
+      channelObj.user?.profile_pic ||
+      channelObj.profile_pic ||
+      raw.banner_image?.url ||
+      null;
+    if (avatarUrl) avatarUrl = String(avatarUrl);
+  } catch (_) {
+    avatarUrl = null; // 装飾要素なので、どんな形のレスポンスが来ても絶対にthrowさせない
+  }
+  return { channel: String(slug), displayName: String(displayName), isLive, viewerCount, avatarUrl };
 }
 
 // ---- Kickアカウント連携（OAuth 2.1 + PKCE、視聴とは独立した「連携状態の確認」専用） ----
@@ -4267,6 +4345,52 @@ async function fetchAllFollowedTwitchChannels() {
   return result;
 }
 
+// ---- Twitchアバター画像（配信チェックパネルのカード表示用） ----
+// /helix/users は1回あたり最大100 idまで指定できる。プロフィール画像はほとんど変わらないため
+// 6時間キャッシュし、キャッシュ済みのidはGet Usersの問い合わせ対象から外す。
+// アバターはあくまで装飾要素なので、取得に失敗しても配信一覧そのものは必ず返す（throwしない）。
+const TWITCH_AVATAR_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const twitchAvatarCache = new Map(); // broadcaster id -> { url, fetchedAt }
+
+/**
+ * 指定したbroadcaster idのプロフィール画像URLを取得する（キャッシュ優先）。
+ * 失敗しても例外は投げず、取れたぶんだけのMapを返す。
+ * @returns {Promise<Map<string, string|null>>} id -> profile_image_url
+ */
+async function fetchTwitchAvatarUrls(ids, clientId, token) {
+  const result = new Map();
+  const now = Date.now();
+  const missing = [];
+  ids.forEach((id) => {
+    const cached = twitchAvatarCache.get(id);
+    if (cached && now - cached.fetchedAt < TWITCH_AVATAR_CACHE_TTL_MS) {
+      result.set(id, cached.url);
+    } else {
+      missing.push(id);
+    }
+  });
+  if (!missing.length) return result;
+  try {
+    for (let i = 0; i < missing.length; i += 100) {
+      const chunk = missing.slice(i, i + 100);
+      const url = new URL('https://api.twitch.tv/helix/users');
+      chunk.forEach((id) => url.searchParams.append('id', id));
+      const res = await httpsRequestJson(url.toString(), {
+        headers: { 'Client-Id': clientId, Authorization: `Bearer ${token}` },
+      });
+      if (res.status !== 200) continue; // アバターは装飾なので、失敗したチャンクは黙って諦める
+      (res.json.data || []).forEach((u) => {
+        const avatar = u.profile_image_url || null;
+        twitchAvatarCache.set(String(u.id), { url: avatar, fetchedAt: Date.now() });
+        result.set(String(u.id), avatar);
+      });
+    }
+  } catch (_) {
+    /* アバター取得の失敗は配信一覧の取得結果に影響させない */
+  }
+  return result;
+}
+
 /** フォロー中チャンネルのうち現在配信中のもの一覧を視聴者数の多い順で取得する */
 async function fetchFollowedLiveChannels() {
   const token = await getValidTwitchUserAccessToken();
@@ -4304,8 +4428,28 @@ async function fetchFollowedLiveChannels() {
       headers: { 'Client-Id': clientId, Authorization: `Bearer ${token}` },
     });
     if (res.status !== 200) throw new Error(`配信状況の取得に失敗しました: ${res.status}`);
-    (res.json.data || []).forEach((s) => live.push({ login: s.user_login, viewerCount: s.viewer_count || 0 }));
+    (res.json.data || []).forEach((s) =>
+      live.push({ login: s.user_login, userId: String(s.user_id || ''), viewerCount: s.viewer_count || 0, avatarUrl: null })
+    );
   }
+
+  // アバター画像（配信チェックパネルのカード表示用）。
+  // 当初案では /helix/streams と同じidチャンクで /helix/users を並列に叩く想定だったが、
+  // アバターが必要なのは「実際に配信中だった配信者」だけ（通常フォロー数よりずっと少ない）ため、
+  // streams の結果が出てからその user_id 分だけを問い合わせる方式にした（リクエスト数が減り、
+  // 実質的な待ち時間も短い）。失敗しても avatarUrl は null のまま配信一覧はそのまま返す。
+  try {
+    const liveIds = live.map((s) => s.userId).filter(Boolean);
+    if (liveIds.length) {
+      const avatars = await fetchTwitchAvatarUrls(liveIds, clientId, token);
+      live.forEach((s) => {
+        s.avatarUrl = avatars.get(s.userId) || null;
+      });
+    }
+  } catch (_) {
+    /* アバターは装飾要素。取得できなくても配信一覧は必ず返す */
+  }
+
   return live.sort((a, b) => b.viewerCount - a.viewerCount);
 }
 
@@ -5250,6 +5394,13 @@ ipcMain.handle('ui:show-content-views', () => {
 // スタンプ/ザッピング/音量ミキサー/設定/チャット統合パネルなど、配信を表示したまま操作したい
 // サイドパネル用。複数パネルを同時に開けるよう、開閉をIDベースで管理する。
 ipcMain.handle('ui:open-side-panel', (_e, { id, width }) => {
+  // 2026-08-08修正（独立レビュー指摘）: 配信チェック(unified-feed)は#16向けに専用BrowserView
+  // を最前面表示するオーバーレイパネル方式へ移植済みだが、openSidePanel系のパネル（設定/ザッピング/
+  // スタンプ等）はメインウィンドウのDOM要素（right:0基準の絶対配置）のままで、BrowserViewより
+  // 必ず下のz-orderになる。overlayPanelViewを開いたまま別のサイドパネルを開くと、そのサイドパネルが
+  // overlayPanelViewの裏に完全に隠れて操作不能になってしまうため、サイドパネルを開く際は
+  // 先にオーバーレイパネルを閉じておく（同時に開いていた状態を意図的に許可しない）。
+  if (overlayPanelOpenId) closeOverlayPanel();
   openSidePanel(id, width);
   return true;
 });
@@ -5266,6 +5417,10 @@ ipcMain.handle('ui:close-all-side-panels', () => {
 
 // 汎用オーバーレイパネル基盤（#16向け、2026-08-07新設）。openSidePanel系とは独立したIPC。
 ipcMain.handle('ui:open-overlay-panel', (_e, panelId) => {
+  // 上のui:open-side-panelコメントと対になる修正: オーバーレイパネル（配信チェック等）を
+  // 開く際も、既に開いているサイドパネルが同様にoverlayPanelViewの裏へ隠れてしまうため、
+  // 先にすべて閉じておく。
+  if (openPanels.length) closeAllSidePanels();
   openOverlayPanel(panelId);
   return true;
 });
@@ -5743,6 +5898,10 @@ ipcMain.handle('auto-tune-in:set-config', (_e, partial) => {
   if ('maxTiles' in partial) next.maxTiles = Math.max(1, Math.min(20, Number(partial.maxTiles) || 1));
   store.set('autoTuneIn', next);
   syncAutoTuneInWatcherState();
+  // 2026-08-08追加: この設定UIが配信チェックパネル（オーバーレイパネル側のBrowserView）へ移り、
+  // メインウィンドウのチップ一覧を直接更新できなくなったため、ここから更新を促す
+  // （旧: renderer.js側のchangeハンドラが直接refreshChips()を呼んでいた）。
+  notifyRenderer('channels:changed');
   return true;
 });
 
@@ -5783,6 +5942,17 @@ ipcMain.handle('auto-tune-in:get-targets', () => getAutoTuneInTargets());
 ipcMain.handle('auto-tune-in:set-targets', (_e, targets) => setAutoTuneInTargets(targets));
 // 「全フォロー/登録一覧」。専用の「読み込む」ボタンからのみ呼ばれる（常時ポーリングなし）。
 ipcMain.handle('auto-tune-in:fetch-all-follow-candidates', () => fetchAllFollowCandidates());
+
+// 配信チェックパネルのプラットフォーム絞り込み（#8対応の永続化）。値自体は従来通り
+// store の unifiedFeedPlatformFilter（settings:get-all/set-all でも読める）に保存する。
+// パネルがオーバーレイ側BrowserViewへ移った（2026-08-08）ため、巨大な settings:get-all /
+// set-all を経由せずこの1項目だけを読み書きできる軽量な専用ハンドラを用意した。
+ipcMain.handle('unified-feed:get-platform-filter', () => store.get('unifiedFeedPlatformFilter') || 'all');
+ipcMain.handle('unified-feed:set-platform-filter', (_e, filter) => {
+  const allowed = ['all', 'twitch', 'youtube', 'kick'];
+  store.set('unifiedFeedPlatformFilter', allowed.includes(filter) ? filter : 'all');
+  return true;
+});
 
 // フィードの「ピン留め」YouTubeチャンネル（自動追加とは独立、オンライン/オフライン問わず常時表示）
 ipcMain.handle('feed-pin:get-youtube', () => getFeedPinnedYoutubeChannels());

@@ -216,59 +216,12 @@
     </div>
   </div>
 
-  <div id="unified-feed-modal" class="hidden">
-    <div class="modal-content">
-      <h2>📡 配信チェック</h2>
-      <p class="note">フォロー中/登録中で現在配信中のチャンネル一覧です（手動更新のみ）。詳細は「使い方/注記」参照。</p>
-      <div class="modal-actions">
-        <button id="unified-feed-refresh-btn">🔄 更新</button>
-        <span id="unified-feed-updated-at" class="note"></span>
-      </div>
-      <div class="group" id="unified-feed-filter-group">
-        <button class="unified-feed-filter-btn active" data-platform="all">すべて</button>
-        <button class="unified-feed-filter-btn" data-platform="twitch">Twitch</button>
-        <button class="unified-feed-filter-btn" data-platform="youtube">YouTube</button>
-        <button class="unified-feed-filter-btn" data-platform="kick">Kick</button>
-      </div>
-      <div id="unified-feed-status" class="note"></div>
-      <div id="unified-feed-list"></div>
-
-      <div class="settings-divider"></div>
-
-      <h3>自動追加の対象を選ぶ</h3>
-      <p class="note">チェックボックスにカーソルを合わせると詳細を確認できます。「使い方/注記」参照。</p>
-      <button id="auto-tune-in-load-all-btn">🔄 全フォロー/登録一覧を読み込む</button>
-      <div id="auto-tune-in-all-status" class="note"></div>
-      <div id="auto-tune-in-all-list"></div>
-
-      <div class="settings-divider"></div>
-
-      <h3>フォロー配信者の自動追加</h3>
-      <p class="note">配信開始で自動追加、終了で自動削除します（60秒間隔）。Twitchアカウント連携が必要です。</p>
-      <div class="account-row">
-        <span id="auto-tune-in-status-dot" class="status-dot unknown"></span>
-        <span id="auto-tune-in-status" class="account-name"></span>
-        <div class="auto-tune-in-actions">
-          <button id="auto-tune-in-connect-btn">Twitchアカウントと連携する</button>
-          <button id="auto-tune-in-disconnect-btn" class="hidden">連携解除</button>
-        </div>
-      </div>
-      <div id="auto-tune-in-message" class="note"></div>
-      <label class="checkbox-row">
-        <input id="auto-tune-in-enabled-input" type="checkbox" disabled />
-        フォロー配信者の自動追加を有効にする
-      </label>
-      <div class="group">
-        <span class="field-label">上限タイル数</span>
-        <input id="auto-tune-in-max-input" class="max-tiles-input" type="number" min="1" max="20" value="4" disabled />
-      </div>
-
-      <div class="modal-actions">
-        <button id="unified-feed-close-btn">閉じる</button>
-      </div>
-    </div>
-  </div>
-
+  <!-- 「📡 配信チェック」(#unified-feed-modal) は 2026-08-08 に汎用オーバーレイパネル基盤へ移植した
+       （src/renderer/overlay-panel/index.html・overlay-panel.js を参照）。旧方式は
+       window.api.openSidePanel('unified-feed', 340) で配信タイルの幅を縮めて隙間を空けるサイドパネル
+       だったが、現在は配信タイルを一切縮めない・消さない専用BrowserViewのオーバーレイになっている。
+       ヘッダーの #unified-feed-btn 自体はこちらに残しており、クリックで openOverlayPanel('unified-feed')
+       を呼ぶだけになっている（renderer.js 参照）。 -->
   <!-- Dropsハブ（依頼#15で3つの個別ボタンを統合）。Twitch/Kick Dropsページ表示・進捗確認は
        無料機能。Drops自動追加/削除セクションのみ、元々あった配信チェック(Pro)からの移設に伴い
        Pro限定を継続する（renderer.jsのapplyPremiumLockUiStates/premiumUnlockedガード参照）。 -->

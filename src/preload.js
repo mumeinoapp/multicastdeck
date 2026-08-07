@@ -47,6 +47,12 @@ contextBridge.exposeInMainWorld('api', {
   getAutoTuneInAddedChannels: () => ipcRenderer.invoke('auto-tune-in:get-added-channels'),
   onAutoTuneInError: (cb) => ipcRenderer.on('auto-tune-in:error', (_e, payload) => cb(payload)),
   onAutoTuneInAuthLost: (cb) => ipcRenderer.on('auto-tune-in:auth-lost', () => cb()),
+  // TwitchのOAuth連携画面（アプリ内BrowserView）の開閉通知。2026-08-08、連携開始ボタンが
+  // 配信チェックパネル（オーバーレイパネル側のBrowserView）へ移ったことに伴う追加。
+  // メインウィンドウ側でしか出来ないヘッダーのロック・「連携画面を閉じる」ボタンの出し入れを、
+  // クリックハンドラの中ではなくこの通知を受けて行う（main.jsのopenTwitchAuthView/closeTwitchAuthView）。
+  onTwitchAuthViewOpened: (cb) => ipcRenderer.on('auto-tune-in:auth-view-opened', () => cb()),
+  onTwitchAuthViewClosed: (cb) => ipcRenderer.on('auto-tune-in:auth-view-closed', () => cb()),
 
   // Kickアカウント連携（OAuth 2.1 + PKCE、視聴自体はログイン不要）
   startKickAuth: () => ipcRenderer.invoke('kick-auth:start'),

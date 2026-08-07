@@ -16,6 +16,28 @@ const panelId = params.get('panel') || '';
 
 const CENTERED_MODAL_IDS = ['help', 'welcome', 'premium-locked', 'feedback', 'pro-auth'];
 
+// 2026-08-08追加（配信チェック/unified-feedのカード化移植分）: mountUnifiedFeed()内で参照する
+// モジュールスコープの状態・定数。ファイル末尾寄りのmountUnifiedFeed()定義の直前に置いていたが、
+// このファイル冒頭のトップレベルコード（if文内のmountGenericPanel(panelId)呼び出し、下記）が
+// スクリプト実行順としてこれらの宣言より先に走るため、mountUnifiedFeed()の同期処理部分から
+// 直接参照した場合にTDZ例外になりうる、helpMountedと全く同じ落とし穴（上のコメント参照）。
+// 現状は該当変数への最初のアクセスが非同期コールバック内のみのため実害は出ていないが、
+// 再発防止のためここへ巻き上げておく。
+const FALLBACK_AVATAR_DATA_URI =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">' +
+      '<circle cx="20" cy="20" r="20" fill="#3a3a44"/>' +
+      '<circle cx="20" cy="15.5" r="6.5" fill="#6b7280"/>' +
+      '<path d="M6.5 36c1.8-7.2 7.3-11 13.5-11s11.7 3.8 13.5 11z" fill="#6b7280"/>' +
+      '</svg>'
+  );
+const UNIFIED_FEED_AUTO_REFRESH_MS = 20 * 1000;
+let unifiedFeedItems = [];
+let unifiedFeedPlatformFilter = 'all';
+let allFollowCandidates = [];
+let unifiedFeedAutoTimer = null;
+
 // help-modalは他モーダルからの導線（welcome/premium-lockedの「使い方/注記を見る」）でも
 // 使うため、初回mount済みかどうかをここで管理し、リスナーの二重登録を避ける。
 // 2026-08-08修正（実機報告の根本原因判明）: 以前はこの宣言がmountHelp()関数定義の直前
@@ -50,6 +72,14 @@ if (CENTERED_MODAL_IDS.includes(panelId)) {
 }
 
 function mountGenericPanel(id) {
+  // 配信チェック（統一フィード）はドッキング型（非centered）だが、汎用プレースホルダではなく
+  // 専用UIを持つため、ここで分岐する。
+  if (id === 'unified-feed') {
+    document.getElementById('overlay-panel-generic').classList.add('hidden');
+    mountUnifiedFeed();
+    return;
+  }
+
   const titleEl = document.getElementById('overlay-panel-title');
   const bodyEl = document.getElementById('overlay-panel-body');
   const closeBtn = document.getElementById('overlay-panel-close');
@@ -369,4 +399,447 @@ function mountProAuth() {
       proCheckoutOtherBtn.disabled = false;
     }
   });
+}
+
+// ---- 配信チェック（統一フィード） ----
+// 2026-08-08、メインウィンドウのrenderer.jsから移植。
+// 旧: window.api.openSidePanel('unified-feed', 340) で配信タイルの幅を縮めて隙間を空ける
+//     サイドパネル方式＋メインウィンドウのDOM。
+// 新: オーバーレイパネル基盤（配信タイルを一切縮めない・消さない専用BrowserViewを最前面に重ねる）。
+// window.api.* の呼び出しはすべて window.overlayApi.* に置き換えてある（IPCチャンネル名は同一で、
+// main.js側のハンドラ・ビジネスロジックは変更していない）。
+//
+// 「配信中一覧」だけはカード表示（アバター画像付き）に作り直した。並び順の
+// 「対象指定を最優先」ルールはmain.js側のfetchUnifiedFeed()から廃止済み（配信中→視聴者数順）。
+// 「自動追加の対象を選ぶ」「フォロー配信者の自動追加」の2セクションは別段階で作り直す予定のため、
+// マークアップ・ロジックともに元のまま引き継いでいる。
+//
+// 状態（一覧の中身・絞り込み・自動更新タイマー）はこのモジュールスコープに持つ。パネルを閉じると
+// BrowserViewがabout:blankへ遷移して破棄されるため状態も消えるが、開くたびに取得し直す設計
+// （旧renderer.js側は常駐するメインウィンドウに状態を持っていたが、ここでは意図的に簡素化している）。
+
+/** メインウィンドウのrenderer.jsにある同名関数と同じ実装（テキストをHTMLとして安全に埋め込む） */
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// FALLBACK_AVATAR_DATA_URI / UNIFIED_FEED_AUTO_REFRESH_MS / unifiedFeedItems等の状態は
+// TDZ対策のためファイル冒頭（CENTERED_MODAL_IDS宣言の直後）へ移動済み。
+
+function mountUnifiedFeed() {
+  const unifiedFeedModal = document.getElementById('unified-feed-modal');
+  const unifiedFeedCloseBtn = document.getElementById('unified-feed-close-btn');
+  const unifiedFeedRefreshBtn = document.getElementById('unified-feed-refresh-btn');
+  const unifiedFeedUpdatedAt = document.getElementById('unified-feed-updated-at');
+  const unifiedFeedStatus = document.getElementById('unified-feed-status');
+  const unifiedFeedList = document.getElementById('unified-feed-list');
+  const unifiedFeedFilterBtns = Array.from(document.querySelectorAll('.unified-feed-filter-btn'));
+
+  const autoTuneInLoadAllBtn = document.getElementById('auto-tune-in-load-all-btn');
+  const autoTuneInAllStatus = document.getElementById('auto-tune-in-all-status');
+  const autoTuneInAllList = document.getElementById('auto-tune-in-all-list');
+
+  const autoTuneInStatusDot = document.getElementById('auto-tune-in-status-dot');
+  const autoTuneInStatusEl = document.getElementById('auto-tune-in-status');
+  const autoTuneInMessageEl = document.getElementById('auto-tune-in-message');
+  const autoTuneInConnectBtn = document.getElementById('auto-tune-in-connect-btn');
+  const autoTuneInDisconnectBtn = document.getElementById('auto-tune-in-disconnect-btn');
+  const autoTuneInEnabledInput = document.getElementById('auto-tune-in-enabled-input');
+  const autoTuneInMaxInput = document.getElementById('auto-tune-in-max-input');
+
+  showEl(unifiedFeedModal);
+  activeEscapeClose = () => window.overlayApi.close();
+
+  // ---- 対象指定（Auto Tune-In）／ピン留めの保存・同期 ----
+
+  /**
+   * Auto Tune-Inの対象指定リストへのチェックボックスON/OFFを反映する。
+   * 現在値をメインプロセスから取り直してから編集・保存するため、フィード一覧・全一覧のどちらから
+   * 操作しても矛盾なく反映される。
+   */
+  async function toggleAutoTuneInTarget(platform, channel, checked) {
+    const key = channel.toLowerCase();
+    const current = await window.overlayApi.getAutoTuneInTargets();
+    const next = checked
+      ? current.some((t) => t.platform === platform && t.channel.toLowerCase() === key)
+        ? current
+        : [...current, { platform, channel }]
+      : current.filter((t) => !(t.platform === platform && t.channel.toLowerCase() === key));
+    await window.overlayApi.setAutoTuneInTargets(next);
+  }
+
+  /** フィード一覧・全一覧のどちらかでチェックが変わったら、もう一方に同じチャンネルがあれば見た目も同期する */
+  function syncTargetCheckboxAcrossLists(platform, channel, checked) {
+    const key = channel.toLowerCase();
+    const feedItem = unifiedFeedItems.find((f) => f.platform === platform && f.channel.toLowerCase() === key);
+    if (feedItem && feedItem.isTarget !== checked) {
+      feedItem.isTarget = checked;
+      renderUnifiedFeedCards();
+    }
+    const allItem = allFollowCandidates.find((f) => f.platform === platform && f.channel.toLowerCase() === key);
+    if (allItem && allItem.isTarget !== checked) {
+      allItem.isTarget = checked;
+      renderAllFollowList();
+    }
+  }
+
+  /**
+   * フィードへの「常時表示（ピン留め）」ON/OFFを反映する。自動追加の対象指定とは完全に独立した
+   * 別のリストで、YouTube専用。
+   */
+  async function toggleFeedPin(channel, displayName, checked) {
+    const key = channel.toLowerCase();
+    const current = await window.overlayApi.getFeedPinnedYoutube();
+    const next = checked
+      ? current.some((p) => p.channel.toLowerCase() === key)
+        ? current
+        : [...current, { channel, displayName }]
+      : current.filter((p) => p.channel.toLowerCase() !== key);
+    await window.overlayApi.setFeedPinnedYoutube(next);
+  }
+
+  /**
+   * ピン留めが変わったら、もう一方のリストに同じチャンネルがあれば見た目も同期する。
+   * ピン留めを外した非配信中チャンネルは次の「🔄 更新」でフィードから消えるが、
+   * その場ですぐ消えると誤操作時に分かりにくいため表示上は「offline」扱いのまま残す。
+   */
+  function syncPinCheckboxAcrossLists(channel, checked) {
+    const key = channel.toLowerCase();
+    const feedItem = unifiedFeedItems.find((f) => f.platform === 'youtube' && f.channel.toLowerCase() === key);
+    if (feedItem && feedItem.isPinned !== checked) feedItem.isPinned = checked;
+    const allItem = allFollowCandidates.find((f) => f.platform === 'youtube' && f.channel.toLowerCase() === key);
+    if (allItem && allItem.isPinned !== checked) allItem.isPinned = checked;
+  }
+
+  /** 「自動追加の対象にする」チェックボックスのtitle（ホバー時の詳細説明）。 */
+  function autoTuneInTargetTitle(platform) {
+    return platform === 'youtube'
+      ? '自動追加の対象にする（YouTubeはチェックを付けないと自動追加されません）'
+      : '自動追加の対象にする（チェックした配信者のみが対象になります）';
+  }
+
+  /** プラットフォームバッジのHTML。YouTubeは公式カラーの赤にするため絵文字ではなくCSS着色のアイコンを使う。 */
+  function platformBadgeHtml(platform) {
+    if (platform === 'youtube') return '<span class="unified-feed-platform-badge youtube">▶</span>';
+    if (platform === 'kick') return '<span class="unified-feed-platform-badge kick">K</span>';
+    return '<span class="unified-feed-platform-badge twitch">●</span>';
+  }
+
+  // ---- 配信中一覧（カード表示） ----
+  // 旧 renderUnifiedFeedList()（1行フラットな .unified-feed-row）をカード（.unified-feed-card）へ
+  // 作り直したもの。表示する情報・操作（対象指定チェック／ピン留めチェック／＋追加ボタンの
+  // ラベルと活性条件）は旧実装と完全に同じ。
+  function renderUnifiedFeedCards() {
+    unifiedFeedList.innerHTML = '';
+    const filtered = unifiedFeedItems.filter(
+      (item) => unifiedFeedPlatformFilter === 'all' || item.platform === unifiedFeedPlatformFilter
+    );
+    if (!filtered.length) {
+      unifiedFeedList.innerHTML = '<div class="note">現在配信中のフォロー配信者はいません</div>';
+      return;
+    }
+    filtered.forEach((item) => {
+      const card = document.createElement('div');
+      const offline = item.isPinned && !item.isLive;
+      card.className = `unified-feed-card${item.alreadyAdded ? ' already-added' : ''}${offline ? ' offline' : ''}`;
+      const viewers = offline
+        ? 'オフライン'
+        : typeof item.viewerCount === 'number'
+        ? `${item.viewerCount.toLocaleString()}人`
+        : '';
+      // ピン留めチェックボックスはYouTube専用。出ない行にも同じ幅のスペーサーを置いて列位置を揃える。
+      const pinHtml =
+        item.platform === 'youtube'
+          ? `<input type="checkbox" class="unified-feed-pin-checkbox" ${item.isPinned ? 'checked' : ''} title="常に表示（ピン留め、オンライン/オフライン問わず自分で外すまで表示し続ける）" />`
+          : '<span class="unified-feed-pin-spacer"></span>';
+      // 自動追加（Auto Tune-In）対象指定チェックボックスはTwitch/YouTube専用。
+      // KickはAuto Tune-In自体が未対応なのでスペーサーにする。
+      const targetHtml =
+        item.platform === 'kick'
+          ? '<span class="unified-feed-target-spacer"></span>'
+          : `<input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="${autoTuneInTargetTitle(item.platform)}" />`;
+      const liveHtml = offline
+        ? ''
+        : '<span class="unified-feed-card-live"><span class="unified-feed-card-live-dot"></span>LIVE</span>';
+      card.innerHTML = `
+        ${targetHtml}
+        ${pinHtml}
+        <img class="unified-feed-card-avatar" alt="" />
+        <div class="unified-feed-card-main">
+          <div class="unified-feed-card-name-row">
+            ${platformBadgeHtml(item.platform)}
+            <span class="unified-feed-card-name">${escapeHtml(item.displayName)}</span>
+            ${liveHtml}
+          </div>
+        </div>
+        <span class="unified-feed-card-viewers">${viewers}</span>
+        <button class="unified-feed-card-add-btn" ${item.alreadyAdded || offline ? 'disabled' : ''}>${
+        item.alreadyAdded ? '表示中' : offline ? 'オフライン' : '＋追加'
+      }</button>
+      `;
+
+      // アバターは装飾要素。URLが無い／読み込みに失敗した場合は必ずフォールバックアイコンにする
+      // （CSPの都合でHTML属性のonerror=は使えないため、JS側でハンドラを付ける）。
+      const avatarImg = card.querySelector('.unified-feed-card-avatar');
+      avatarImg.onerror = () => {
+        avatarImg.onerror = null; // フォールバック画像自体の読み込み失敗で無限ループしないように
+        avatarImg.src = FALLBACK_AVATAR_DATA_URI;
+      };
+      avatarImg.src = item.avatarUrl || FALLBACK_AVATAR_DATA_URI;
+
+      const targetCheckbox = card.querySelector('.unified-feed-target-checkbox');
+      if (targetCheckbox) {
+        targetCheckbox.addEventListener('change', async (e) => {
+          const checked = e.target.checked;
+          item.isTarget = checked;
+          await toggleAutoTuneInTarget(item.platform, item.channel, checked);
+          renderUnifiedFeedCards();
+          syncTargetCheckboxAcrossLists(item.platform, item.channel, checked);
+          refreshAutoTuneInStatus();
+        });
+      }
+      const pinCheckbox = card.querySelector('.unified-feed-pin-checkbox');
+      if (pinCheckbox) {
+        pinCheckbox.addEventListener('change', async (e) => {
+          const checked = e.target.checked;
+          item.isPinned = checked;
+          await toggleFeedPin(item.channel, item.displayName, checked);
+          renderUnifiedFeedCards();
+          syncPinCheckboxAcrossLists(item.channel, checked);
+        });
+      }
+      card.querySelector('.unified-feed-card-add-btn').addEventListener('click', async () => {
+        if (offline) return;
+        const result = await window.overlayApi.addChannel(item.channel, item.platform);
+        if (!result || !result.ok) {
+          unifiedFeedStatus.textContent = `追加に失敗しました: ${result ? result.error : '不明なエラー'}`;
+          return;
+        }
+        item.alreadyAdded = true;
+        renderUnifiedFeedCards();
+        // メインウィンドウ側のチップ一覧はmain.jsのchannels:add→'channels:changed'通知を受けて
+        // 自動的に更新されるため、ここからrefreshChips()相当を呼ぶ必要はない。
+      });
+      unifiedFeedList.appendChild(card);
+    });
+  }
+
+  // ---- 自動追加の対象を選ぶ（全フォロー/登録一覧、オンライン・オフライン問わず） ----
+  // ここは別段階で作り直す予定のため、旧実装（.unified-feed-row のフラットな行）のまま。
+
+  function renderAllFollowList() {
+    autoTuneInAllList.innerHTML = '';
+    if (!allFollowCandidates.length) return;
+    allFollowCandidates.forEach((item) => {
+      const row = document.createElement('div');
+      row.className = 'unified-feed-row';
+      const pinHtml =
+        item.platform === 'youtube'
+          ? `<input type="checkbox" class="unified-feed-pin-checkbox" ${item.isPinned ? 'checked' : ''} title="常に表示（ピン留め、オンライン/オフライン問わず自分で外すまで表示し続ける）" />`
+          : '<span class="unified-feed-pin-spacer"></span>';
+      row.innerHTML = `
+        <input type="checkbox" class="unified-feed-target-checkbox" ${item.isTarget ? 'checked' : ''} title="${autoTuneInTargetTitle(item.platform)}" />
+        ${pinHtml}
+        ${platformBadgeHtml(item.platform)}
+        <span class="unified-feed-name">${escapeHtml(item.displayName)}</span>
+      `;
+      row.querySelector('.unified-feed-target-checkbox').addEventListener('change', async (e) => {
+        const checked = e.target.checked;
+        item.isTarget = checked;
+        await toggleAutoTuneInTarget(item.platform, item.channel, checked);
+        syncTargetCheckboxAcrossLists(item.platform, item.channel, checked);
+        refreshAutoTuneInStatus();
+      });
+      const pinCheckbox = row.querySelector('.unified-feed-pin-checkbox');
+      if (pinCheckbox) {
+        pinCheckbox.addEventListener('change', async (e) => {
+          const checked = e.target.checked;
+          item.isPinned = checked;
+          await toggleFeedPin(item.channel, item.displayName, checked);
+          syncPinCheckboxAcrossLists(item.channel, checked);
+        });
+      }
+      autoTuneInAllList.appendChild(row);
+    });
+  }
+
+  autoTuneInLoadAllBtn.addEventListener('click', async () => {
+    autoTuneInAllStatus.textContent = '取得中...(フォロー/登録一覧を読み込みます。登録数が多いと時間がかかることがあります)';
+    autoTuneInLoadAllBtn.disabled = true;
+    try {
+      const { items, errors } = await window.overlayApi.fetchAllFollowCandidates();
+      allFollowCandidates = items;
+      renderAllFollowList();
+      const errMessages = [];
+      if (errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
+      if (errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
+      autoTuneInAllStatus.textContent = errMessages.join(' / ') || `${items.length}件取得しました`;
+    } catch (err) {
+      autoTuneInAllStatus.textContent = `取得に失敗しました: ${err.message || err}`;
+    } finally {
+      autoTuneInLoadAllBtn.disabled = false;
+    }
+  });
+
+  // ---- フォロー配信者の自動追加（Twitchアカウント連携・有効化・上限枠） ----
+  // ここも別段階で作り直す予定のため、旧実装のロジックをそのまま引き継いでいる。
+
+  async function refreshAutoTuneInStatus() {
+    const status = await window.overlayApi.getAutoTuneInStatus();
+    if (status.connected) {
+      autoTuneInStatusDot.className = 'status-dot connected';
+      autoTuneInStatusEl.textContent = '連携済み Twitch';
+      autoTuneInConnectBtn.classList.add('hidden');
+      autoTuneInDisconnectBtn.classList.remove('hidden');
+    } else {
+      autoTuneInStatusDot.className = 'status-dot disconnected';
+      autoTuneInStatusEl.textContent = '未連携 Twitch（YouTubeのみの場合は連携不要です）';
+      autoTuneInConnectBtn.classList.remove('hidden');
+      autoTuneInDisconnectBtn.classList.add('hidden');
+    }
+    autoTuneInEnabledInput.disabled = !status.canEnable;
+    autoTuneInMaxInput.disabled = !status.canEnable;
+    autoTuneInEnabledInput.checked = status.enabled;
+    autoTuneInMaxInput.value = status.maxTiles;
+  }
+
+  autoTuneInConnectBtn.addEventListener('click', async () => {
+    // 旧実装ではここでサイドパネルを閉じ→OAuth画面→再度開き直していたが、オーバーレイパネル方式では
+    // このパネル自体を閉じるとBrowserViewがabout:blankへ遷移してJSごと破棄され、下の
+    // await startTwitchAuth() が結果を受け取れなくなる。OAuth画面のBrowserViewは後から
+    // addBrowserViewされるぶん自動的にこのパネルより前面に来て全面を覆うため、閉じる必要もない
+    // （連携完了後はmain.jsのcloseTwitchAuthView()がこのパネルを再度setTopBrowserViewで最前面に戻す）。
+    // メインウィンドウ側のヘッダーロック・「連携画面を閉じる」ボタンの表示は、main.jsが送る
+    // auto-tune-in:auth-view-opened / -closed 通知でrenderer.jsが行う。
+    autoTuneInMessageEl.textContent = '連携処理中... 開いた画面でTwitchにログイン・認可してください。';
+
+    const result = await window.overlayApi.startTwitchAuth();
+
+    if (result.ok) {
+      autoTuneInMessageEl.textContent = `連携しました（${result.login}としてログイン中）`;
+    } else if (!result.cancelled) {
+      autoTuneInMessageEl.textContent = `エラー: ${result.error}`;
+    } else {
+      autoTuneInMessageEl.textContent = '';
+    }
+    refreshAutoTuneInStatus();
+  });
+
+  autoTuneInDisconnectBtn.addEventListener('click', async () => {
+    await window.overlayApi.disconnectTwitchAuth();
+    refreshAutoTuneInStatus();
+  });
+
+  autoTuneInEnabledInput.addEventListener('change', async () => {
+    await window.overlayApi.setAutoTuneInConfig({ enabled: autoTuneInEnabledInput.checked });
+  });
+
+  autoTuneInMaxInput.addEventListener('change', async () => {
+    const v = Math.max(1, Math.min(20, Number(autoTuneInMaxInput.value) || 1));
+    autoTuneInMaxInput.value = v;
+    await window.overlayApi.setAutoTuneInConfig({ maxTiles: v });
+  });
+
+  window.overlayApi.onAutoTuneInError(({ message }) => {
+    autoTuneInMessageEl.textContent = `エラー: ${message}`;
+  });
+
+  window.overlayApi.onAutoTuneInAuthLost(() => {
+    autoTuneInMessageEl.textContent =
+      'Twitchとの連携が切れました。下の「Twitchアカウントと連携する」から再連携してください（フォロー配信者の自動追加は停止しています）。';
+    refreshAutoTuneInStatus();
+  });
+
+  // ---- 取得・自動更新 ----
+  // パネルを開いている間、Twitch/YouTube分だけを短い間隔で自動更新する。Kick分はBrowserViewの
+  // フルロードを伴い重いため自動更新の対象からは外し、初回取得・手動更新ボタン押下時のみ取得する。
+  // includeKick=falseで取得した際は、直前まで表示していたKick分の結果をそのまま引き継ぐ。
+
+  function startUnifiedFeedAutoTimer() {
+    stopUnifiedFeedAutoTimer();
+    unifiedFeedAutoTimer = setInterval(() => refreshUnifiedFeed({ includeKick: false }), UNIFIED_FEED_AUTO_REFRESH_MS);
+  }
+
+  function stopUnifiedFeedAutoTimer() {
+    if (unifiedFeedAutoTimer) {
+      clearInterval(unifiedFeedAutoTimer);
+      unifiedFeedAutoTimer = null;
+    }
+  }
+
+  async function refreshUnifiedFeed(options = {}) {
+    const includeKick = options.includeKick !== false;
+    unifiedFeedStatus.textContent = '取得中...';
+    unifiedFeedRefreshBtn.disabled = true;
+    try {
+      const { items, errors } = await window.overlayApi.fetchUnifiedFeed({ includeKick });
+      if (includeKick) {
+        unifiedFeedItems = items;
+      } else {
+        const previousKickItems = unifiedFeedItems.filter((item) => item.platform === 'kick');
+        unifiedFeedItems = items.concat(previousKickItems);
+      }
+      renderUnifiedFeedCards();
+      const errMessages = [];
+      if (errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
+      if (errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
+      if (includeKick && errors.kick) errMessages.push(`Kick: ${errors.kick}`);
+      unifiedFeedStatus.textContent = errMessages.join(' / ');
+      unifiedFeedUpdatedAt.textContent = `最終更新: ${new Date().toLocaleTimeString('ja-JP')}`;
+    } catch (err) {
+      unifiedFeedStatus.textContent = `取得に失敗しました: ${err.message || err}`;
+    } finally {
+      unifiedFeedRefreshBtn.disabled = false;
+    }
+  }
+
+  unifiedFeedRefreshBtn.addEventListener('click', () => refreshUnifiedFeed());
+
+  // 閉じる操作はメインプロセス側（closeOverlayPanel）がBrowserViewの取り外し・about:blank遷移まで
+  // 面倒を見るため、旧実装のclosePanel系の後始末は不要。
+  unifiedFeedCloseBtn.addEventListener('click', () => {
+    stopUnifiedFeedAutoTimer();
+    window.overlayApi.close();
+  });
+  activeEscapeClose = () => {
+    stopUnifiedFeedAutoTimer();
+    window.overlayApi.close();
+  };
+  // 外側クリック等でメインプロセス側から閉じられた場合も、about:blank遷移前に確実に止めておく。
+  window.addEventListener('pagehide', stopUnifiedFeedAutoTimer);
+
+  /**
+   * @param {string} filter 'all'|'twitch'|'youtube'|'kick'
+   * @param {boolean} [persist=true] falseを渡すと保存済み設定の復元時などstore書き込みを省略する
+   */
+  function setUnifiedFeedPlatformFilter(filter, persist = true) {
+    unifiedFeedPlatformFilter = filter;
+    unifiedFeedFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.platform === filter));
+    // #8対応: 再起動後も選択中の絞り込みを維持できるよう永続化する。
+    if (persist) window.overlayApi.setUnifiedFeedPlatformFilter(filter);
+  }
+
+  unifiedFeedFilterBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setUnifiedFeedPlatformFilter(btn.dataset.platform);
+      renderUnifiedFeedCards();
+    });
+  });
+
+  // ---- 初期化 ----
+  // 旧実装ではメインウィンドウの起動時に絞り込みを復元していたが、パネル側に状態を持つようになった
+  // ため、パネルを開くたびにここで読み直す（persist=falseで、読んだ値の無駄な書き戻しを避ける）。
+  (async function initUnifiedFeed() {
+    try {
+      const filter = await window.overlayApi.getUnifiedFeedPlatformFilter();
+      setUnifiedFeedPlatformFilter(filter || 'all', false);
+    } catch (_) {
+      setUnifiedFeedPlatformFilter('all', false);
+    }
+    refreshUnifiedFeed();
+    refreshAutoTuneInStatus();
+    startUnifiedFeedAutoTimer();
+  })();
 }
