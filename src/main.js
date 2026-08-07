@@ -374,15 +374,35 @@ let overlayPanelOpenId = null;
 
 const OVERLAY_PANEL_DEFAULT_WIDTH = 360;
 
+// フィードバックモーダルの下書き（件名・本文）。centered化に伴い外側クリックでも閉じられる
+// ようになったため、閉じる＝入力内容の消失にならないよう、BrowserView自体は
+// closeOverlayPanel()でabout:blankへ遷移し中身を破棄するが、メインプロセス側にこの下書きを
+// 保持しておき、次回feedbackを開いた時にoverlayApi.getFeedbackDraft()で復元する
+// （送信成功時のみクリアする）。
+let feedbackDraft = { subject: '', body: '' };
+
 /**
  * 2026-08-07追加: help/welcome/premium-locked/feedbackの4モーダルをこの基盤へ移植した
  * （旧: hideContentViewsForOverlayで全BrowserViewを丸ごと退避する方式。配信を一切消さない
- * 方針への転換に伴う変更）。これらのpanelIdの時だけ、ドッキング型（右側360px）ではなく
- * 画面全体を覆うフルウィンドウ表示に切り替える。
+ * 方針への転換に伴う変更）。
  * 会員登録(pro-auth、決済フローを含む)は今回のスコープ外（次回セッションで移植予定。
  * それまでは従来通りhideContentViewsForOverlayを使用する＝この一覧には含めない）。
+ *
+ * 2026-08-08修正（実機報告3件の根本原因対応）: 当初は「カード自体のサイズだけBrowserView
+ * を取り、画面中央に配置する」方式にしていたが、これだとカードの外側（配信タイルが透けて
+ * 見える領域）はoverlayPanelViewの範囲外になるため、そこをクリックすると配下の配信タイル
+ * 自身のBrowserViewへ直接クリックが渡ってしまっていた。タイル側はmousedownで
+ * startTileInteraction→bringTileToFrontを呼ぶため、その一度のクリックだけでタイルが
+ * overlayPanelViewより前面に来てしまい、「外側クリックで閉じない」「（前面を奪われた結果）
+ * ボタン/タブが反応しなくなる」「見た目が配信タイルと重なって崩れる」の3件はすべて
+ * この単一の原因から発生していた。
+ * 対策として、centered系4モーダルもドッキング型パネルと同じ「コンテンツ表示領域全体
+ * （ヘッダー下〜ウィンドウ下端、幅いっぱい）」までBrowserView自体を広げ、配下の配信タイルへ
+ * クリックが一切漏れないようにした。カードの外側は引き続き透明背景のまま（配信は隠さない）
+ * にしつつ、外側クリックでの「閉じる」判定はoverlayPanelView自身のJS
+ * （overlay-panel.js側、背景要素へのclickでoverlayApi.close()）で行う。
  */
-const OVERLAY_PANEL_FULLWINDOW_IDS = new Set(['help', 'welcome', 'premium-locked', 'feedback']);
+const OVERLAY_PANEL_CENTERED_IDS = new Set(['help', 'welcome', 'premium-locked', 'feedback']);
 
 function ensureOverlayPanelView() {
   if (overlayPanelView) return overlayPanelView;
@@ -401,7 +421,11 @@ function ensureOverlayPanelView() {
 function relayoutOverlayPanel() {
   if (!overlayPanelView || !mainWindow || !overlayPanelOpenId) return;
   const { width, height } = mainWindow.getContentBounds();
-  if (OVERLAY_PANEL_FULLWINDOW_IDS.has(overlayPanelOpenId)) {
+  if (OVERLAY_PANEL_CENTERED_IDS.has(overlayPanelOpenId)) {
+    // 2026-08-08修正: コンテンツ表示領域全体を覆う（配下の配信タイルへクリックを一切
+    // 漏らさないため）。カード自体の見た目のサイズ・中央寄せはCSS側
+    // （#help-modal等のdisplay:flex+align/justify-center、.modal-content系のmax-width）で
+    // 行う。詳細はOVERLAY_PANEL_CENTERED_IDSの定義コメント参照。
     overlayPanelView.setBounds({
       x: 0,
       y: HEADER_HEIGHT,
@@ -447,6 +471,13 @@ function openOverlayPanel(panelId) {
   relayoutOverlayPanel();
   if (typeof mainWindow.setTopBrowserView === 'function') {
     mainWindow.setTopBrowserView(view);
+  }
+  // フィードバックの件名/本文入力欄などにキーボード入力がすぐ効くよう、開いたら明示的に
+  // フォーカスを移しておく（読み込み完了前に呼んでも無害なため、did-finish-load待ちはしない）。
+  try {
+    view.webContents.focus();
+  } catch (_) {
+    /* ignore */
   }
   notifyOverlayPanelChanged();
 }
@@ -5242,6 +5273,14 @@ ipcMain.handle('ui:close-overlay-panel', () => {
 });
 
 ipcMain.handle('ui:get-overlay-panel-state', () => overlayPanelOpenId);
+
+// フィードバック下書きの保存/取得（centered化で外側クリック閉じに対応したことに伴う追加）。
+ipcMain.handle('ui:get-feedback-draft', () => feedbackDraft);
+
+ipcMain.handle('ui:set-feedback-draft', (_e, { subject, body } = {}) => {
+  feedbackDraft = { subject: subject || '', body: body || '' };
+  return true;
+});
 
 // 初回起動案内ポップアップの表示済みフラグ
 ipcMain.handle('app:get-first-launch-done', () => store.get('firstLaunchDone'));

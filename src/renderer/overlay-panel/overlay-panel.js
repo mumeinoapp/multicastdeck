@@ -11,7 +11,20 @@
 const params = new URLSearchParams(window.location.search);
 const panelId = params.get('panel') || '';
 
-const FULLWINDOW_MODAL_IDS = ['help', 'welcome', 'premium-locked', 'feedback'];
+const CENTERED_MODAL_IDS = ['help', 'welcome', 'premium-locked', 'feedback'];
+
+// help-modalは他モーダルからの導線（welcome/premium-lockedの「使い方/注記を見る」）でも
+// 使うため、初回mount済みかどうかをここで管理し、リスナーの二重登録を避ける。
+// 2026-08-08修正（実機報告の根本原因判明）: 以前はこの宣言がmountHelp()関数定義の直前
+// （ファイル後半）にあったが、下のトップレベルコード（if文内のmountCenteredModal(panelId)
+// 呼び出し）がスクリプト実行順としてこの宣言より先に走り、panelId==='help'の場合
+// mountHelp()内でhelpMountedを参照した瞬間にTDZ（`let`の初期化前アクセス）で
+// `Uncaught ReferenceError: Cannot access 'helpMounted' before initialization`が発生していた。
+// このエラーはモジュールのトップレベル実行を丸ごと停止させるため、使い方/注記モーダルの
+// タブ・閉じるボタン・外側クリックなど、以降に定義されるはずだった全てのイベントリスナーが
+// 一切登録されず「何をクリックしても無反応」という実機報告と完全に一致する（宣言をここへ
+// 巻き上げて、呼び出しより確実に先に評価されるようにした）。
+let helpMounted = false;
 
 // Escapeキーで現在表示中のモーダルを閉じる際、各モーダル固有の副作用（welcomeの
 // setFirstLaunchDone等）を確実に実行するための差し替え口。mount*関数側で上書きする。
@@ -23,9 +36,12 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') activeEscapeClose();
 });
 
-if (FULLWINDOW_MODAL_IDS.includes(panelId)) {
+if (CENTERED_MODAL_IDS.includes(panelId)) {
   document.getElementById('overlay-panel-generic').classList.add('hidden');
-  mountFullwindowModal(panelId);
+  // html自体にクラスを付与する（bodyだけだと、html要素の不透明背景がbodyのtransparentの
+  // 下から透けずに残ってしまうため）。
+  document.documentElement.classList.add('centered-modal');
+  mountCenteredModal(panelId);
 } else {
   mountGenericPanel(panelId);
 }
@@ -41,7 +57,7 @@ function mountGenericPanel(id) {
   closeBtn.addEventListener('click', () => window.overlayApi.close());
 }
 
-function mountFullwindowModal(id) {
+function mountCenteredModal(id) {
   if (id === 'help') mountHelp();
   else if (id === 'welcome') mountWelcome();
   else if (id === 'premium-locked') mountPremiumLocked();
@@ -55,9 +71,6 @@ function hideEl(el) {
   el.classList.add('hidden');
 }
 
-// help-modalは他モーダルからの導線（welcome/premium-lockedの「使い方/注記を見る」）でも
-// 使うため、初回mount済みかどうかをここで管理し、リスナーの二重登録を避ける。
-let helpMounted = false;
 function mountHelp() {
   const helpModal = document.getElementById('help-modal');
   const helpCloseBtn = document.getElementById('help-close-btn');
@@ -70,6 +83,13 @@ function mountHelp() {
   const helpTabContents = Array.from(document.querySelectorAll('[data-help-content]'));
 
   helpCloseBtn.addEventListener('click', () => window.overlayApi.close());
+  // 2026-08-08追加: overlayPanelViewがコンテンツ領域全体まで広がったことに伴い、カード外側
+  // （#help-modal自身＝透明な背景部分）のクリックで閉じられるようにする。e.target===helpModal
+  // の時だけ発火させることで、カード内（.modal-content内の要素）へのクリックはバブリングして
+  // きても誤って閉じないようにしている。
+  helpModal.addEventListener('click', (e) => {
+    if (e.target === helpModal) window.overlayApi.close();
+  });
   helpTabBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.helpTab;
@@ -99,6 +119,11 @@ function mountWelcome() {
   activeEscapeClose = closeWelcome;
 
   welcomeCloseBtn.addEventListener('click', closeWelcome);
+  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由）。setFirstLaunchDone
+  // の副作用も揃えるため、closeBtnと同じcloseWelcome()を使う。
+  welcomeModal.addEventListener('click', (e) => {
+    if (e.target === welcomeModal) closeWelcome();
+  });
   welcomeOpenHelpBtn.addEventListener('click', async () => {
     await window.overlayApi.setFirstLaunchDone();
     hideEl(welcomeModal);
@@ -114,6 +139,10 @@ function mountPremiumLocked() {
   activeEscapeClose = () => window.overlayApi.close();
 
   premiumLockedCloseBtn.addEventListener('click', () => window.overlayApi.close());
+  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由）。
+  premiumLockedModal.addEventListener('click', (e) => {
+    if (e.target === premiumLockedModal) window.overlayApi.close();
+  });
   premiumLockedOpenHelpBtn.addEventListener('click', () => {
     hideEl(premiumLockedModal);
     mountHelp();
@@ -138,7 +167,26 @@ function mountFeedback() {
     feedbackMessage.style.color = isError ? '#f04747' : '';
   }
 
+  // 下書き復元（centered化で外側クリックでも閉じられるようになったため、入力途中の内容を
+  // 消さないよう、メインプロセス側に保持している下書きをここで反映する）。
+  window.overlayApi.getFeedbackDraft().then((draft) => {
+    if (!draft) return;
+    feedbackSubjectInput.value = draft.subject || '';
+    feedbackBodyInput.value = draft.body || '';
+  });
+
+  function saveDraft() {
+    window.overlayApi.setFeedbackDraft(feedbackSubjectInput.value, feedbackBodyInput.value);
+  }
+  feedbackSubjectInput.addEventListener('input', saveDraft);
+  feedbackBodyInput.addEventListener('input', saveDraft);
+
   feedbackCloseBtn.addEventListener('click', () => window.overlayApi.close());
+  // 2026-08-08追加: カード外側クリックで閉じる（help-modalと同じ理由）。下書きは既存の
+  // input時保存（saveDraft）で常に最新が保持されているため、ここで追加の保存処理は不要。
+  feedbackModal.addEventListener('click', (e) => {
+    if (e.target === feedbackModal) window.overlayApi.close();
+  });
   feedbackSendBtn.addEventListener('click', async () => {
     const subject = feedbackSubjectInput.value.trim();
     const body = feedbackBodyInput.value.trim();
@@ -153,6 +201,7 @@ function mountFeedback() {
       setFeedbackMessage('送信しました。ありがとうございます！');
       feedbackSubjectInput.value = '';
       feedbackBodyInput.value = '';
+      window.overlayApi.setFeedbackDraft('', '');
     } catch (err) {
       setFeedbackMessage(`送信に失敗しました（${err.message || err}）。しばらくしてからもう一度お試しください。`, true);
     } finally {

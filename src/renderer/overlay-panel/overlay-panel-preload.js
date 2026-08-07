@@ -15,4 +15,10 @@ contextBridge.exposeInMainWorld('overlayApi', {
   getFirstLaunchDone: () => ipcRenderer.invoke('app:get-first-launch-done'),
   setFirstLaunchDone: () => ipcRenderer.invoke('app:set-first-launch-done'),
   sendFeedback: (subject, body) => ipcRenderer.invoke('app-menu:send-feedback', { subject, body }),
+
+  // フィードバック下書きの保存/復元（2026-08-07、centered化＝外側クリックで閉じられる
+  // ようになったことに伴う追加。閉じてもBrowserView自体はabout:blankへ遷移し中身が
+  // 破棄されるため、メインプロセス側にドラフトを保持する）。
+  getFeedbackDraft: () => ipcRenderer.invoke('ui:get-feedback-draft'),
+  setFeedbackDraft: (subject, body) => ipcRenderer.invoke('ui:set-feedback-draft', { subject, body }),
 });

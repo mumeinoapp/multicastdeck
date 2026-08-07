@@ -41,11 +41,28 @@ function applyPremiumLockUiStates() {
   document.getElementById('drops-auto-add-btn')?.classList.toggle('locked', !premiumUnlocked);
 }
 
+// centered化（2026-08-07）に伴う外側クリック閉じ対応で追加。openOverlayPanelSafe()を
+// 呼んだ直後の1回だけ、documentのclickリスナーでの「外側クリック閉じ」を無視させるための
+// フラグ。役割：あるオーバーレイパネルが開いている状態で、別のオーバーレイパネルを開く
+// ボタン（例: 配信タイル下のロックボタン→premium-locked）をクリックした場合、そのボタンの
+// クリックハンドラがopenOverlayPanel（新パネルを開くIPC）を発行した直後、同じクリックが
+// documentまでバブリングして「外側クリック」判定に引っかかる。IPCの往復は非同期な一方、
+// documentへのバブリングは同期的に続くため、この時点ではoverlayPanelOpenIdはまだ古い値
+// （直前に開いていたパネルのID）のままで、誤って「閉じる」が呼ばれ、新パネルが開いた
+// 直後にすぐ閉じてしまう（画面がチラつく）競合が起きる。async関数はawaitに達するまで
+// 同期的に実行されるため、await直前でこのフラグを立てておけば、同じクリックの
+// バブリング中にdocumentリスナーが読む時点で確実にtrueになっている。
+let suppressNextOutsideClick = false;
+async function openOverlayPanelSafe(panelId) {
+  suppressNextOutsideClick = true;
+  await window.api.openOverlayPanel(panelId);
+}
+
 // 2026-08-07: 配信を消さないオーバーレイ方式（openOverlayPanel）へ移植済み。
 // 中身（DOM・タブ切り替え・「使い方/注記」への導線）はoverlay-panel/overlay-panel.jsへ
 // そのまま移した（見た目・挙動は変えていない）。
 async function showPremiumLockedModal() {
-  await window.api.openOverlayPanel('premium-locked');
+  await openOverlayPanelSafe('premium-locked');
 }
 window.api.onPremiumChanged((value) => {
   premiumUnlocked = !!value;
@@ -770,16 +787,21 @@ updateDropsHubBtnLabel();
 // そのまま移した（見た目・挙動は変えていない）。onOpenHelp/onOpenWelcome（main.js側からの
 // トリガーIPC。現状どこからも発火されていない旧経路）はそのまま残してよいため未変更。
 async function openHelpModal() {
-  await window.api.openOverlayPanel('help');
+  await openOverlayPanelSafe('help');
 }
 window.api.onOpenHelp(openHelpModal);
 
 async function openWelcomeModal() {
-  await window.api.openOverlayPanel('welcome');
+  await openOverlayPanelSafe('welcome');
 }
 window.api.onOpenWelcome(openWelcomeModal);
 
-// 初回起動時のみ自動で案内ポップアップを表示
+// 初回起動時のみ自動で案内ポップアップを表示。
+// 注意: これはクリックイベントを起点としない呼び出しのため、あえてopenOverlayPanelSafe
+// ではなくwindow.api.openOverlayPanelを直接呼ぶ（openOverlayPanelSafeが立てる
+// suppressNextOutsideClickフラグは、それを消費するはずの「同じクリックのdocumentへの
+// バブリング」が存在しないため立てっぱなしになり、起動後ユーザーが最初に行う外側クリックが
+// 誤って無視され、ウェルカムモーダルを閉じるのに2回クリックが必要になってしまうため）。
 (async () => {
   const done = await window.api.getFirstLaunchDone();
   if (!done) {
@@ -886,7 +908,7 @@ proAuthCloseBtn.addEventListener('click', async () => {
 // （送信処理・エラー表示等）はoverlay-panel/overlay-panel.jsへそのまま移した
 // （見た目・挙動は変えていない）。
 async function openFeedbackModal() {
-  await window.api.openOverlayPanel('feedback');
+  await openOverlayPanelSafe('feedback');
 }
 
 function setProAuthMessage(text, isError = false) {
@@ -2943,6 +2965,26 @@ window.api.onSidePanelsChanged((positions) => {
 let overlayPanelOpenId = null;
 window.api.onOverlayPanelChanged(({ openId }) => {
   overlayPanelOpenId = openId;
+});
+
+// centered化（2026-08-07、help/welcome/premium-locked/feedback）に伴い、外側クリックで
+// 閉じられるようにする。仕組みはvolume-mixer等のfloating-dropdownと同じ：これらのモーダルは
+// 専用BrowserViewとしてカードサイズぶんだけ最前面に表示されるため、その内部でのクリックは
+// このメインウィンドウのdocumentには届かない。よってdocument側でclickを検知できた時点で
+// 「モーダルの外側（＝配信タイルやメインウィンドウのUI）をクリックした」と判定できる。
+// なお、モーダルを開くボタン自体のクリックはこのイベントと同じclickだが、
+// openOverlayPanel→IPC往復→onOverlayPanelChangedの反映は非同期のため、このリスナーが
+// 同期的に評価される時点ではoverlayPanelOpenIdはまだ更新されておらず、開いた直後に
+// 誤って閉じてしまうことはない。
+document.addEventListener('click', () => {
+  if (suppressNextOutsideClick) {
+    // 別のオーバーレイパネルを開くボタン自身のクリックだった場合はここで消費するだけで、
+    // 閉じる処理は行わない（openOverlayPanelSafe側のコメント参照）。
+    suppressNextOutsideClick = false;
+    return;
+  }
+  if (!overlayPanelOpenId) return;
+  window.api.closeOverlayPanel();
 });
 
 function setStatusBanner(text) {

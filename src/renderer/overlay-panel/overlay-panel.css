@@ -19,6 +19,16 @@ body {
   overflow: hidden;
 }
 
+/* help/welcome/premium-locked/feedbackの4モーダル（centered化、2026-08-07）専用。
+   このBrowserView自体がカードのサイズちょうどに縮小配置されるため、html/bodyの不透明背景を
+   消してカードの外側に何も描画されない（＝配信タイルがそのまま透けて見える）ようにする。
+   ドッキング型の汎用サイドパネル（#overlay-panel-generic、将来の配信チェック等）は
+   従来通り不透明のままにするため、このクラスが付いた時だけ限定的に上書きする。 */
+html.centered-modal,
+html.centered-modal body {
+  background: transparent;
+}
+
 .overlay-panel {
   display: flex;
   flex-direction: column;
