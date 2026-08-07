@@ -494,12 +494,13 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus('読み込み中…', false);
     try {
       const result = await window.streamCheckApi.fetchUnifiedFeed({ includeKick, includeTwitch, includeYoutube });
-      // 2026-08-08追加（調査用、原因特定後に削除予定）: YouTubeアイコン不具合の調査のため、
-      // 実際にDOM側から見つかった1件分のアバター周辺HTMLをこのウィンドウのdevtools consoleに
-      // 一度だけ出す。F12/Ctrl+Shift+Iでこのウィンドウ自身のdevtoolsを開いて確認できる。
-      if (!youtubeAvatarDebugLogged && result && result.debug && result.debug.youtubeAvatarHtml) {
+      // 2026-08-08追加（調査用、正常化を確認できたら削除予定）: YouTubeアイコン不具合の調査で
+      // 判明した「ytd-channel-rendererのimgに遅延読み込みでsrcが一切付かない」問題への対策
+      // （ytInitialData由来の取得に変更）が実際に効いているかを、このウィンドウのdevtools
+      // consoleに一度だけ出す。F12/Ctrl+Shift+Iでこのウィンドウ自身のdevtoolsを開いて確認できる。
+      if (!youtubeAvatarDebugLogged && result && result.debug && result.debug.youtubeAvatarDebug) {
         youtubeAvatarDebugLogged = true;
-        console.log('[MCD調査用] YouTubeアバター周辺のHTML:', result.debug.youtubeAvatarHtml);
+        console.log('[MCD調査用] YouTubeアバター取得状況:', result.debug.youtubeAvatarDebug);
       }
       const items = (result && result.items) || [];
       // 今回取得しなかったプラットフォーム分は、直前まで表示していた内容をそのまま引き継ぐ

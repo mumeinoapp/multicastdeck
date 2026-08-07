@@ -3237,14 +3237,16 @@ async function loadYoutubeLiveStreamFree(streamView, channelName, handleOrChanne
   }
 }
 
-// 2026-08-08追加（一時的な調査用）: YouTubeアイコンが3回の修正でも直らなかったため、
-// 実際にDOM側で何が見つかっている/いないのかを配信一覧ウィンドウのdevtools consoleで
-// 直接確認できるようにする。scrapeYoutubeSubscribedChannels()実行のたびに、最初の1件分の
-// アバター周辺のouterHTML（先頭1500文字）をここに保持し、fetchUnifiedFeedのレスポンスに
-// debug.youtubeAvatarHtmlとして載せ、stream-check-window.js側で一度だけconsole.logする。
-// 原因を特定できたら、この診断コード一式（この変数・fetchUnifiedFeed内のdebug付与・
-// stream-check-window.js側のconsole.log）は削除してよい。
-let lastYoutubeAvatarDebugHtml = null;
+// 2026-08-08追加（一時的な調査用）: YouTubeアイコンが3回の修正でも直らず、実機のdevtools
+// consoleで確認したところ<img>にsrc/data-src/srcsetが一切付いていないことが判明（4回目の
+// 修正でytInitialData由来の取得方式に変更済み）。今回の修正で実際にytInitialDataが見つかり
+// アバターが解決できたかどうかを、配信一覧ウィンドウのdevtools consoleで直接確認できるように
+// しておく。scrapeYoutubeSubscribedChannels()実行のたびに件数サマリをここに保持し、
+// fetchUnifiedFeedのレスポンスにdebug.youtubeAvatarDebugとして載せ、stream-check-window.js側で
+// 一度だけconsole.logする。正常に直っていることを確認できたら、この診断コード一式
+// （この変数・fetchUnifiedFeed内のdebug付与・stream-check-window.js側のconsole.log）は
+// 削除してよい。
+let lastYoutubeAvatarDebugInfo = null;
 
 /**
  * 統一フィード（ロードマップ項目6）用: ログイン済みYouTubeアカウントの登録チャンネル一覧を取得する。
@@ -3287,14 +3289,73 @@ async function scrapeYoutubeSubscribedChannels() {
     `);
     const script = `
       (function () {
-        // 2026-08-08修正: 1回目の修正（querySelector('#avatar img, yt-img-shadow img, img')
-        // || 深い探索、というfallback）でも直らなかった。原因は || の短絡評価: このセレクタ列の
-        // 最後に汎用 'img' を含めているため、たとえそれがアバターと無関係な・srcが空のimg要素
-        // でも「見つかった」扱いになり、本当のアバター画像を探しにshadow DOM側へは絶対に
-        // フォールバックしない状態になっていた（要素が「見つかるか」ではなく「使えるURLが
-        // 取れるか」で判定する必要があった）。
-        // そのため、軽量DOM・shadow DOM問わず候補のimg要素を全て集めて、実際にURLが
-        // 取れたものが見つかるまで順番に試す方式に変更する。
+        // 2026-08-08修正（4回目、真因判明）: 調査用ログで実際のDOMを確認した結果、
+        // <img id="img" ...> にはsrc/data-src/srcsetのいずれの属性も一切付いておらず、
+        // 完全に空のプレースホルダのままだった。過去3回の修正（shadow DOM探索・全候補探索・
+        // プロトコル相対URL正規化）はいずれも「見つかったURL文字列をどう解決するか」を
+        // 直していたが、そもそもURLがDOM上に一度も書き込まれていなかったため的外れだった。
+        // 原因: このBrowserViewはmainWindow.addBrowserView()で実際にウィンドウへ追加して
+        // いない検証用ビュー（画面に見せない目的で意図的にそうしている）で、Chromiumは
+        // 「addBrowserViewされていない＝画面に一度も表示されない」ビューをバックグラウンド
+        // 扱いし、YouTube側のIntersectionObserverによる画像遅延読み込みが実質的に発火しない
+        // （＝いくら待っても・スクロールしてもimgのsrcが書き込まれない）と考えられる。
+        // 対策: 遅延読み込みされる<img>には頼らず、ページに埋め込まれている初期データ
+        // window.ytInitialData（Polymerのハイドレーション用JSON、画像の遅延描画とは無関係に
+        // ページ読み込み時点で必ず存在する）を直接たどってサムネイルURLを取得する方式に変更。
+        // DOM探索（従来方式）は万一ytInitialDataが見つからない場合の保険として残す。
+        function collectThumbnailsByKey(root) {
+          // channelRenderer相当のオブジェクト（channelIdとthumbnail.thumbnails[]を持つノード）を
+          // ytInitialData全体から再帰的に探し、チャンネルID・ハンドルURLをキーにしたURL辞書を作る。
+          var map = {};
+          var stack = [root];
+          var seen = typeof WeakSet === 'function' ? new WeakSet() : null;
+          while (stack.length) {
+            var node = stack.pop();
+            if (!node || typeof node !== 'object') continue;
+            if (seen) {
+              if (seen.has(node)) continue;
+              seen.add(node);
+            }
+            try {
+              var thumbs = node.thumbnail && node.thumbnail.thumbnails;
+              if (node.channelId && Array.isArray(thumbs) && thumbs.length) {
+                var best = thumbs[thumbs.length - 1];
+                var url = best && best.url;
+                if (url) {
+                  if (url.indexOf('//') === 0) url = 'https:' + url;
+                  map['/channel/' + node.channelId] = url;
+                  var canonical =
+                    node.navigationEndpoint &&
+                    node.navigationEndpoint.browseEndpoint &&
+                    node.navigationEndpoint.browseEndpoint.canonicalBaseUrl;
+                  if (canonical) map[canonical] = url;
+                }
+              }
+            } catch (e) {
+              /* 1ノードの解析失敗で全体を諦めない */
+            }
+            for (var key in node) {
+              if (Object.prototype.hasOwnProperty.call(node, key)) {
+                var value = node[key];
+                if (value && typeof value === 'object') stack.push(value);
+              }
+            }
+          }
+          return map;
+        }
+        var thumbnailsByKey = {};
+        var ytInitialDataFound = false;
+        var ytInitialDataEntryCount = 0;
+        try {
+          if (window.ytInitialData) {
+            ytInitialDataFound = true;
+            thumbnailsByKey = collectThumbnailsByKey(window.ytInitialData);
+            ytInitialDataEntryCount = Object.keys(thumbnailsByKey).length;
+          }
+        } catch (e) {
+          /* ytInitialDataが無い/構造が想定と違う場合は空のままにし、DOM側にフォールバックする */
+        }
+        // 保険用のDOM探索（ytInitialDataで見つからなかった場合のみ使う）。
         function collectImgCandidates(root) {
           var result = [];
           var stack = [root];
@@ -3309,14 +3370,6 @@ async function scrapeYoutubeSubscribedChannels() {
           return result;
         }
         function resolveImgSrc(img) {
-          // img.src/img.currentSrc（プロパティ）はブラウザが自動的に絶対URLへ解決してくれるが、
-          // getAttribute('data-src')・getAttribute('srcset')は生の属性値をそのまま返すため、
-          // YouTube側が "//yt3.ggpht.com/..." のようなプロトコル相対URLを使っている場合は
-          // そのまま返ってきてしまう。これをこのファイル一覧取得（youtube.com上で実行）の
-          // 戻り値としてstream-check-window.js（file://で読み込まれる別ウィンドウ）側の
-          // <img src>にそのまま渡すと、"file://yt3.ggpht.com/..."のように誤って解決され
-          // 常に読み込み失敗してしまう（2026-08-08、2度の修正でも直らなかった問題の真因と推測）。
-          // 最後にまとめて先頭"//"をhttps:に正規化する。
           var src = img.currentSrc || img.src || '';
           if (!src || src.indexOf('data:image/gif') === 0 || src.indexOf('data:image/png') === 0) {
             src = img.getAttribute('data-src') || '';
@@ -3331,9 +3384,7 @@ async function scrapeYoutubeSubscribedChannels() {
           if (src && src.indexOf('//') === 0) src = 'https:' + src;
           return src || null;
         }
-        function extractAvatarUrl(el) {
-          // #avatar内を優先スコープにして探す（無関係なimg要素を拾う確率を下げるため）。
-          // 何も見つからなければ要素全体まで範囲を広げる。
+        function extractAvatarUrlFromDom(el) {
           var scope = el.querySelector('#avatar') || el;
           var candidates = collectImgCandidates(scope);
           if (!candidates.length && scope !== el) candidates = collectImgCandidates(el);
@@ -3346,9 +3397,7 @@ async function scrapeYoutubeSubscribedChannels() {
         var items = Array.from(document.querySelectorAll('ytd-channel-renderer'));
         var seen = {};
         var result = [];
-        // 2026-08-08追加（調査用）: 最初の1件だけ、アバター探索に使ったスコープ要素の
-        // outerHTMLをそのまま持ち帰る。実際のマークアップを見て初めて確実な原因特定ができるため。
-        var avatarDebugHtml = null;
+        var matchedFromInitialData = 0;
         items.forEach(function (el) {
           try {
             var link = el.querySelector('#main-link') || el.querySelector('a[href^="/@"], a[href^="/channel/"]');
@@ -3358,29 +3407,30 @@ async function scrapeYoutubeSubscribedChannels() {
             if (!href || !name || seen[href]) return;
             seen[href] = true;
             // アバター画像（配信チェックパネルのカード表示用、2026-08-08追加）。
-            // YouTube側は遅延読み込みのため、src が空/1x1プレースホルダのことがある。その場合は
-            // data-src / srcset へフォールバックする。取れなければ null のままにする（装飾要素
-            // なので取得できなくても一覧取得自体は成功扱い）。
-            var avatarUrl = extractAvatarUrl(el);
-            if (avatarDebugHtml === null) {
-              try {
-                var debugScope = el.querySelector('#avatar') || el;
-                avatarDebugHtml = String(debugScope.outerHTML || '').slice(0, 1500);
-              } catch (e2) {
-                avatarDebugHtml = '(outerHTML取得失敗: ' + String(e2 && e2.message) + ')';
-              }
-            }
+            // まずytInitialData由来のURLを試し（遅延読み込みに左右されない）、
+            // 見つからない場合のみDOM側（遅延読み込みで空のことがある）にフォールバックする。
+            var avatarUrl = thumbnailsByKey[href] || null;
+            if (avatarUrl) matchedFromInitialData++;
+            if (!avatarUrl) avatarUrl = extractAvatarUrlFromDom(el);
             result.push({ href: href, name: name, avatarUrl: avatarUrl });
           } catch (e) {
             /* 1要素の解析失敗で一覧全体を落とさない */
           }
         });
-        return { items: result, avatarDebugHtml: avatarDebugHtml };
+        return {
+          items: result,
+          debug: {
+            ytInitialDataFound: ytInitialDataFound,
+            ytInitialDataEntryCount: ytInitialDataEntryCount,
+            matchedFromInitialData: matchedFromInitialData,
+            totalChannels: result.length,
+          },
+        };
       })();
     `;
     const raw = await view.webContents.executeJavaScript(script);
     const rawItems = raw && Array.isArray(raw.items) ? raw.items : [];
-    lastYoutubeAvatarDebugHtml = (raw && raw.avatarDebugHtml) || null;
+    lastYoutubeAvatarDebugInfo = raw && raw.debug ? JSON.stringify(raw.debug) : null;
     return rawItems
       .map((item) => {
         const href = String(item.href || '');
@@ -3616,7 +3666,7 @@ async function fetchUnifiedFeed(options = {}) {
   // 2026-08-08追加（調査用、原因特定後に削除予定）: YouTubeアバター取得の診断用。
   // includeYoutubeがtrueの呼び出し（scrapeYoutubeSubscribedChannelsが実行された場合）のみ
   // 意味のある値が入る。stream-check-window.js側で一度だけconsole.logする。
-  const debug = includeYoutube && lastYoutubeAvatarDebugHtml ? { youtubeAvatarHtml: lastYoutubeAvatarDebugHtml } : undefined;
+  const debug = includeYoutube && lastYoutubeAvatarDebugInfo ? { youtubeAvatarDebug: lastYoutubeAvatarDebugInfo } : undefined;
   return { items, errors, debug };
 }
 
