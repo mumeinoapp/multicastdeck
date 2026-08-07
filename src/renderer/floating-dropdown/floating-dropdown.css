@@ -1,0 +1,176 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* このBrowserView自体の矩形＝ドロップダウンの表示範囲そのもの（main.js側でbounds設定済み）
+   なので、position:fixedや独自のborder/box-shadowは不要（メインウィンドウ側の
+   .input-history-dropdown が持っていたそれらのスタイルはBrowserViewの枠自体には不要）。
+   ただし見た目を旧実装と揃えるため背景・枠線・角丸はここでも付与する。 */
+.floating-dropdown-root {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  background: #26262c;
+  border: 1px solid #3a3a42;
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.floating-dropdown-root {
+  scrollbar-width: thin;
+  scrollbar-color: #4f8cff transparent;
+}
+
+.floating-dropdown-root::-webkit-scrollbar {
+  width: 8px;
+}
+
+.floating-dropdown-root::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.floating-dropdown-root::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%);
+  border-radius: 999px;
+}
+
+.floating-dropdown-root::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #6ea1ff 0%, #4de8ff 100%);
+}
+
+.input-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.input-history-row:hover {
+  background: #3a3a44;
+}
+
+.input-history-row-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #efeff1;
+  font-size: 13px;
+}
+
+.input-history-row-remove {
+  flex-shrink: 0;
+  margin-left: 8px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #adadb8;
+  cursor: pointer;
+  line-height: 1;
+  font-size: 13px;
+  padding: 0;
+}
+
+.input-history-row-remove:hover {
+  background: #e5484d;
+  color: #fff;
+}
+
+/* 自作メニューバー（ファイル/表示/ヘルプ/バージョン/通知）の小ドロップダウン向け
+   （2026-08-07追加）。src/renderer/style.css の .menu-bar-dropdown-item 系と
+   見た目を揃えてある（元のCSSをそのまま複製、配色のみ共通）。 */
+.menu-bar-dropdown-item {
+  padding: 6px 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  color: #efeff1;
+  font-size: 12.5px;
+}
+
+.menu-bar-dropdown-item:hover {
+  background: #3a3a44;
+}
+
+.menu-bar-dropdown-item.disabled {
+  color: #7a7a82;
+  cursor: default;
+}
+
+.menu-bar-dropdown-item.disabled:hover {
+  background: none;
+}
+
+.menu-bar-dropdown-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: #3a3a42;
+}
+
+/* 通知ドロップダウンは長文になりうるため折り返す（style.css側の
+   #notifications-menu-dropdown .menu-bar-dropdown-item と同じ対応。renderer.js側が
+   payload.wrap=trueの時だけ#app-menu-rootにwrap-rowsクラスを付与する）。 */
+#app-menu-root.wrap-rows .menu-bar-dropdown-item {
+  white-space: normal;
+  max-width: 320px;
+}
+
+/* 音量ミキサー（旧#volume-mixer-panel/.volume-rowから移植、2026-08-07追加）。
+   行はチャンネル名＋ミュートアイコン＋スライダーのみのシンプル構成（1行に収める）。
+   hover色は他パネルの行(.input-history-row等)と統一した。 */
+.volume-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 4px;
+}
+
+.volume-row:hover {
+  background: #3a3a44;
+}
+
+.volume-row .volume-icon {
+  cursor: pointer;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.volume-row .volume-row-name {
+  font-size: 11px;
+  width: 52px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #efeff1;
+}
+
+.volume-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: #9147ff;
+  cursor: pointer;
+}
+
+.volume-mixer-empty {
+  padding: 10px 8px;
+  font-size: 12px;
+  color: #adadb8;
+}

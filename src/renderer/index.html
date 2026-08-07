@@ -42,6 +42,15 @@
       </span>
       <div class="menu-bar-dropdown" id="version-menu-dropdown"></div>
     </div>
+    <!-- #6対応: 登録チャンネルの配信開始通知。中身はrenderer.js側で動的に描画する
+         （バージョン項目と同じ赤丸バッジ.menu-badge/.has-update-badgeの仕組みを流用）。 -->
+    <div class="menu-bar-item" data-menu="notifications">
+      <span class="menu-bar-label">
+        通知
+        <span class="menu-badge" id="notifications-menu-badge"></span>
+      </span>
+      <div class="menu-bar-dropdown" id="notifications-menu-dropdown"></div>
+    </div>
     <!-- こちらは会員登録と同様、ドロップダウンを持たずクリックで直接ポップアップを開く単独項目。 -->
     <div class="menu-bar-item" data-menu="feedback" data-action="open-feedback">
       <span class="menu-bar-label">フィードバック</span>
@@ -52,6 +61,12 @@
     <div class="menu-bar-item" data-menu="pro-auth" data-action="open-pro-auth">
       <span class="menu-bar-label">会員登録</span>
     </div>
+    <!-- 通知/エラー表示（旧#status-bar、ヘッダー直下の横幅いっぱいの帯だったものをここに統合）。
+         Drops進捗・各種エラー通知などをmenu-bar行の右端に小さく表示する（renderer.js
+         setStatusBanner参照）。中身が空の間は#status-indicator.hasText無しでCSS側が幅0に畳む。 -->
+    <div id="status-indicator">
+      <span id="drops-progress-result"></span>
+    </div>
   </nav>
 
   <header id="control-bar">
@@ -61,7 +76,14 @@
         <option value="youtube">YouTube</option>
         <option value="kick">Kick</option>
       </select>
-      <input id="channel-input" type="text" placeholder="チャンネル名を入力（YouTubeは@ハンドル可、Kickはユーザー名）" />
+      <!-- #13対応: チャンネル名入力履歴を、矢印キーでの選択ではなく入力欄下のオリジナルUI
+           （一覧表示＋各行×ボタンで個別削除）に変更（renderer.js setupChannelNameHistoryDropdown参照）。
+           2026-08-07: ドロップダウンの中身はfloating-dropdown（専用BrowserView、配信タイルを
+           絶対に消さない方式）で描画するようになったため、ここにはDOMを置かない。
+           位置決めの基準にするため入力欄をラップしている。 -->
+      <div class="channel-input-wrap">
+        <input id="channel-input" type="text" autocomplete="off" placeholder="チャンネル名を入力（YouTubeは@ハンドル可、Kickはユーザー名）" />
+      </div>
       <button id="add-channel-btn">追加</button>
     </div>
 
@@ -72,15 +94,13 @@
          視覚的に分けている。Pro機能はpremiumUnlockedがfalseの間ロック表示になる
          （applyPremiumLockUiStatesで制御。ロック中はクリックでアンロック案内を表示するのみ）。 -->
     <div id="action-buttons">
-      <button id="drops-toggle-btn" class="action-btn" draggable="true" data-key="drops-toggle">Twitch Drops</button>
-      <button id="drops-progress-btn" class="action-btn" draggable="true" data-key="drops-progress" disabled>進捗を確認</button>
-      <button id="kick-drops-toggle-btn" class="action-btn" draggable="true" data-key="kick-drops-toggle" title="Kick公式のDrops&報酬ページをそのまま表示">Kick Drops</button>
+      <button id="layout-share-btn" class="action-btn" draggable="true" data-key="layout-share" title="チャンネル構成・タイル配置をURLで共有">🔗 共有</button>
+      <button id="drops-hub-btn" class="action-btn" draggable="true" data-key="drops-hub" title="Twitch/KickのDrops確認・進捗確認・自動追加設定">🎁 Drops</button>
       <button id="emotes-btn" class="action-btn" draggable="true" data-key="emotes">⭐ スタンプ</button>
       <button id="chat-integration-btn" class="action-btn" draggable="true" data-key="chat-integration">🗂 チャット統合</button>
-      <button id="layout-auto-arrange-btn" class="action-btn" draggable="true" data-key="auto-arrange" title="タイルの位置・サイズを自動整列でリセット">🔲 自動整列</button>
-      <button id="layout-share-btn" class="action-btn" draggable="true" data-key="layout-share" title="チャンネル構成・タイル配置をURLで共有">🔗 共有</button>
       <button id="zapping-btn" class="action-btn pro-btn" draggable="true" data-key="zapping" data-pro-feature="true">🎲 ザッピング<span class="pro-badge">PRO</span></button>
       <button id="unified-feed-btn" class="action-btn pro-btn" draggable="true" data-key="unified-feed" data-pro-feature="true" title="フォロー中/登録中で現在配信中の配信者一覧・自動追加設定">📡 配信チェック<span class="pro-badge">PRO</span></button>
+      <button id="layout-auto-arrange-btn" class="action-btn" draggable="true" data-key="auto-arrange" title="タイルの位置・サイズを自動整列でリセット">🔲 自動整列</button>
       <button id="settings-open-btn" class="action-btn" draggable="true" data-key="settings" title="設定">⚙ 設定</button>
     </div>
 
@@ -89,13 +109,10 @@
       <button id="account-login-close-btn" class="hidden">🔐 ログイン画面を閉じる</button>
       <!-- Auto Tune-In用のTwitch OAuth連携画面（設定パネル内のボタンから開く）を閉じる／キャンセルする -->
       <button id="twitch-auth-close-btn" class="hidden">🔐 連携をキャンセル</button>
-      <!-- 音量ミキサーはボタン直下に垂れるドロップダウンのため、実際の表示位置（画面右端基準）とズレないよう右端に配置 -->
+      <!-- 音量ミキサーはボタン直下に垂れるfloating-dropdown（専用BrowserView）のため、実際の表示位置とズレないよう右端に配置 -->
       <button id="volume-mixer-btn" title="配信ごとの音量調整">🔊 音量</button>
     </div>
   </header>
-
-  <!-- ヘッダー下の細い通知バー。Drops進捗・各種エラー通知など、以前はヘッダー内に表示していたものをここに集約 -->
-  <div id="status-bar"><span id="drops-progress-result"></span></div>
 
   <div id="emotes-panel" class="hidden">
     <div class="panel-content">
@@ -116,11 +133,8 @@
     </div>
   </div>
 
-  <!-- 音量ミキサーは「🔊 音量」ボタン直下に垂れるドロップダウン形式（ヘッダーボタンの再クリック、
-       またはドロップダウン外側のクリックで閉じる。専用の閉じるボタンは持たない）。 -->
-  <div id="volume-mixer-panel" class="hidden">
-    <div id="volume-mixer-list"></div>
-  </div>
+  <!-- 音量ミキサーは2026-08-07セッションでfloating-dropdown基盤（専用BrowserView）へ移植済み。
+       このDOMは廃止済み（#volume-mixer-btnのみ残し、開閉トリガー・矩形計算のアンカーとして使う）。 -->
 
   <div id="layout-share-panel" class="hidden">
     <div class="panel-content">
@@ -156,7 +170,10 @@
       <button id="chat-integration-mode-timeline-btn" data-pro-feature="true">全タブ統合<span class="pro-badge">PRO</span></button>
     </div>
     <div id="chat-integration-tabs" class="chat-integration-tabs"></div>
-    <div id="chat-integration-timeline" class="chat-integration-timeline hidden"></div>
+    <div id="chat-integration-timeline-wrap" class="chat-integration-timeline-wrap hidden">
+      <div id="chat-integration-timeline" class="chat-integration-timeline"></div>
+      <button id="chat-integration-jump-bottom-btn" class="chat-integration-jump-bottom-btn hidden">↓ 最新へ</button>
+    </div>
     <div id="chat-integration-send-row" class="chat-integration-send-row hidden">
       <input id="chat-integration-send-input" type="text" placeholder="上のタブで選択中のチャンネルへ送信" />
       <button id="chat-integration-send-btn">送信</button>
@@ -246,9 +263,37 @@
         <input id="auto-tune-in-max-input" class="max-tiles-input" type="number" min="1" max="20" value="4" disabled />
       </div>
 
+      <div class="modal-actions">
+        <button id="unified-feed-close-btn">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dropsハブ（依頼#15で3つの個別ボタンを統合）。Twitch/Kick Dropsページ表示・進捗確認は
+       無料機能。Drops自動追加/削除セクションのみ、元々あった配信チェック(Pro)からの移設に伴い
+       Pro限定を継続する（renderer.jsのapplyPremiumLockUiStates/premiumUnlockedガード参照）。 -->
+  <div id="drops-hub-modal" class="hidden">
+    <div class="modal-content">
+      <h2>🎁 Drops</h2>
+      <p class="note">Twitch/KickのDropsページ表示、進捗確認、自動追加/削除の設定をまとめて操作できます。</p>
+
+      <h3>Twitch Drops</h3>
+      <div class="group">
+        <button id="drops-hub-twitch-toggle-btn">Twitch Dropsを開く</button>
+        <button id="drops-hub-progress-btn" disabled>進捗を確認</button>
+      </div>
+      <div id="drops-hub-progress-result" class="note"></div>
+
       <div class="settings-divider"></div>
 
-      <h3>Drops自動追加/削除</h3>
+      <h3>Kick Drops</h3>
+      <div class="group">
+        <button id="drops-hub-kick-toggle-btn">Kick Dropsを開く</button>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <h3>Drops自動追加/削除 <span class="pro-badge">PRO</span></h3>
       <p class="note">指定ゲームの配信中チャンネルを自動追加/削除します（60秒間隔）。詳細は「使い方/注記」参照。</p>
       <div id="drops-auto-list"></div>
       <div class="group drops-auto-add-row">
@@ -259,95 +304,14 @@
       <div id="drops-auto-status" class="note"></div>
 
       <div class="modal-actions">
-        <button id="unified-feed-close-btn">閉じる</button>
+        <button id="drops-hub-close-btn">閉じる</button>
       </div>
     </div>
   </div>
 
-  <!-- 「使い方/注記」統合ヘルプ画面。旧・注記モーダルを発展させたもの。画面中央に最前面表示し、
-       各パネルにあった長い個別説明文はここに集約している（各パネル側は要点のみの短い注記に整理済み）。 -->
-  <div id="help-modal" class="hidden">
-    <div class="modal-content help-modal-content">
-      <h2>📖 使い方 / 注記</h2>
-      <div class="help-tabs">
-        <button class="help-tab-btn active" data-help-tab="general">全般</button>
-        <button class="help-tab-btn" data-help-tab="twitch">Twitch</button>
-        <button class="help-tab-btn" data-help-tab="youtube">YouTube</button>
-        <button class="help-tab-btn" data-help-tab="kick">Kick</button>
-        <button class="help-tab-btn" data-help-tab="premium">有料機能</button>
-      </div>
-
-      <div class="help-tab-content" data-help-content="general">
-        <h3>基本操作</h3>
-        <ul>
-          <li>配信・チャットの画面（タイル）はどこをクリックしてもドラッグで移動でき、タイル外周付近から辺リサイズができます。「🔲 自動整列」でグリッド配置に戻せます。</li>
-          <li>各種パネル（スタンプ・ザッピング・音量・設定・チャット統合・配信チェック等）は開いていても配信画面を消さず、複数同時に開けます。Escapeキーでも閉じられます。</li>
-          <li>ヘッダーの操作ボタン（Twitch Drops・スタンプ・チャット統合・ザッピング・配信チェック等）は、ボタン自体をドラッグすることで並び順を自由に入れ替えられます。入れ替えた順序は次回起動時にも保存されます。</li>
-          <li>「🔗 共有」で現在のチャンネル構成・タイル配置をURLとして書き出し/取り込みできます（個人設定・APIキー等は含みません）。</li>
-          <li>「📡 配信チェック」の「自動追加の対象を選ぶ」は、<strong>チェックした配信者のみ</strong>が自動追加の対象になります。YouTubeはチェックを付けないと自動追加できません。Kickはシステム上、自動追加自体に対応しておらず手動でのみ追加できます（詳細は各タブ参照）。</li>
-        </ul>
-        <h3>免責事項</h3>
-        <ul>
-          <li>Drops進捗表示・各種フォロー/登録一覧の取得などは<strong>非公式機能</strong>です。各配信サイト側の仕様変更により、予告なく動作を停止・変更する場合があります。</li>
-          <li>これらの機能は自己責任でのご利用をお願いします。開発者は動作の継続性を保証しません。</li>
-          <li>Dropsインベントリの詳細画面はTwitch/Kickそれぞれの公式ページをそのまま表示しています（外枠のみ独自デザイン）。Kick版は進捗の自動読み取りには対応していません。</li>
-          <li>決済（サブスク購入等）は配信サイト自体に関するものは本ツール内では一切処理せず、すべて各社公式UIに委譲しています。</li>
-        </ul>
-      </div>
-
-      <div class="help-tab-content hidden" data-help-content="twitch">
-        <h3>Twitch対応について</h3>
-        <ul>
-          <li>視聴・チャット埋め込みはTwitch公式の埋め込みプレイヤー/チャットを使用しています。</li>
-          <li>「⭐ スタンプ」はTwitch Helix API（無料・Client Credentials方式、設定画面でClient ID/Secretが必要）でチャンネル固有＋グローバルエモートを取得します。お気に入り登録したスタンプはワンクリックでチャット欄へ挿入されます（お気に入り以外はコード名のコピー）。チャンネル固有スタンプのうち<strong>サブスク限定（そのチャンネルにサブスクしていないと使えないもの）</strong>には専用バッジが付きます。</li>
-          <li>Drops進捗確認は「確認操作をした時だけ」DOM読み取りを行う非公式機能です（常時監視はしません）。</li>
-          <li>🎲 ザッピング（Twitch版）は<code>/helix/streams</code>（無料API）で言語・ゲーム名・タグを厳密に絞り込めます。</li>
-        </ul>
-      </div>
-
-      <div class="help-tab-content hidden" data-help-content="youtube">
-        <h3>YouTube対応について（既知の制約）</h3>
-        <ul>
-          <li>チャンネルの追加は「配信URLの直接貼り付け」または「@ハンドル指定」に対応しています。@ハンドル指定は、YouTube公式APIではなく<strong>非公式のページ判定（youtube.com/@handle/live の内容確認）</strong>で現在配信中の動画を探すため、YouTube側のページ構造が変わると動かなくなる可能性があります。</li>
-          <li>動画URLを直接貼り付けて追加した場合、その配信が終了すると再度URLを貼り直す必要があります（自動で次の配信には切り替わりません）。</li>
-          <li>チャット統合の「タブ」モードはYouTube公式のライブチャット埋め込みをそのまま使用しています。「全タブ統合」モードは、YouTube側に無料で使える公開チャットプロトコルが無いため、ライブチャット埋め込みページを裏で読み込みチャット内容を画面から読み取る<strong>非公式の方式</strong>で実現しています（この裏読み込みはパネルを開いている間だけ動作し、閉じると自動的に停止します）。</li>
-          <li>音量調整・タイルのドラッグ移動/リサイズはYouTube埋め込みの構造上、Twitchと全く同じ操作感にはできません（映像の縁（外周付近）からのみ移動・リサイズ操作が可能です）。</li>
-          <li>「📡 配信チェック」でのYouTube登録チャンネル一覧は、YouTube公式APIではなく<strong>ログイン済みセッションでの登録チャンネルページの内容確認（非公式）</strong>で取得しています。アプリ内でYouTubeにログインしていない場合はYouTube分は表示されません。</li>
-          <li>「🎲 ザッピング」のYouTube版は<strong>β版</strong>です。TwitchのようなAPIによる厳密な言語/ゲーム絞り込みには対応していません。YouTube公式のライブ配信一覧・検索ページを読み取る<strong>非公式の方式</strong>で、言語での絞り込みは非対応、ゲーム名・タグは動画タイトル/チャンネル名への部分一致によるゆるい絞り込みです。</li>
-          <li>YouTube Data APIキーの設定欄は現状使用していません（将来の機能拡張用に残しています）。</li>
-        </ul>
-      </div>
-
-      <div class="help-tab-content hidden" data-help-content="kick">
-        <h3>Kick対応について（現時点のスコープ）</h3>
-        <ul>
-          <li>チャンネルの追加・視聴はKick公式の埋め込みプレイヤー（player.kick.com）を使用しており、視聴自体はログイン不要です。</li>
-          <li>「Kickアカウント連携」（設定画面）はOAuth 2.1（PKCE）による公式連携で、連携済みかどうかの確認・接続/切断のみを行います。連携してもタイル追加等の自動化は行いません。</li>
-          <li>「📡 配信チェック」はKickにも対応していますが、フォロー中一覧はKick公式APIには存在しないため<strong>kick.com自身の非公式エンドポイント（Cookieセッション経由）を使う非公式の方式</strong>です。事前に設定画面のKickアカウント行からログインしておく必要があります。</li>
-          <li>Kick版Dropsは公式のDrops&報酬ページをそのまま表示するのみで、進捗の自動読み取りには対応していません。</li>
-          <li>🎲 ザッピング（Kick版）はKick公式Public APIを使用します。設定画面のKick Client ID/Secretが未設定の場合は開始できません（ログイン状態は不要、アプリ登録のみで動作）。</li>
-          <li><strong>Kickはシステム上、フォロー配信者の自動追加（Auto Tune-In）に対応しておらず、チャンネルは手動でのみ追加できます。</strong>60秒間隔の常時ポーリングが必要になるため、Kickの取得方式（隠しブラウザでのページ読み込みを伴う重い処理）を常時実行するのは負荷・Bot対策リスクの面で見送っています。</li>
-        </ul>
-      </div>
-
-      <div class="help-tab-content hidden" data-help-content="premium">
-        <h3>有料機能（Pro機能）について</h3>
-        <p class="note">
-          基本無料＋一部機能を有料解除する方針です。以下の機能は<strong>Proプラン加入者のみ</strong>利用できます
-          （未加入の場合はボタンがロック表示になります）。メニューバーの「会員登録」からメールアドレスでログインし、加入状況の反映・お申し込み（購入）ができます。
-        </p>
-        <ul>
-          <li>📡 配信チェック（フォロー配信者の自動追加）</li>
-          <li>🗂 チャット統合の「全タブ統合」モード</li>
-          <li>🎲 ザッピング（ランダム自動切換え）</li>
-          <li>Drops自動追加/削除</li>
-        </ul>
-        <p class="note">上記以外の機能（複数配信の同時視聴、チャット統合の「タブ」モード、スタンプ、個別音量調整、レイアウトのURL共有など）は今後も無料でご利用いただけます。</p>
-      </div>
-
-      <button id="help-close-btn">閉じる</button>
-    </div>
-  </div>
+  <!-- 「使い方/注記」統合ヘルプ画面は2026-08-07、配信を消さないオーバーレイ方式
+       （openOverlayPanel、src/renderer/overlay-panel/配下）へ移植済み。DOMはそちらへ移した
+       ため、ここには残していない（MCD大規模アプデ: 配信を消さないオーバーレイ方式への移行）。 -->
 
   <!-- アップデート確認はメニューバーの「アップデートを確認」（ファイル/表示/ヘルプと同じ
        ネイティブドロップダウンメニュー）だけで完結するため、専用のHTML/モーダルは持たない
@@ -406,61 +370,10 @@
     </div>
   </div>
 
-  <!-- フィードバック。メニューバーの「フィードバック」（バージョンの隣）から開く中央ポップアップ。
-       件名・本文のみのシンプルな作り。決済バックエンド（multistream-payment-backend）の
-       POST /feedback経由でDiscordのチャンネルへ転送する（main.jsのapp-menu:send-feedback参照）。 -->
-  <div id="feedback-modal" class="hidden">
-    <div class="modal-content feedback-modal-content">
-      <h2>フィードバック</h2>
-
-      <label>件名</label>
-      <input id="feedback-subject-input" type="text" placeholder="例: バグ報告 / 機能追加のご要望" />
-
-      <label>本文</label>
-      <textarea id="feedback-body-input" rows="6" placeholder="バグ報告や機能追加のご要望など、お気軽にお送りください。"></textarea>
-
-      <p class="note">送信ボタンを押すと、開発者へ直接届きます。</p>
-      <div id="feedback-message" class="note"></div>
-
-      <div class="modal-actions">
-        <button id="feedback-send-btn">送信</button>
-        <button id="feedback-close-btn">閉じる</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Pro機能（ロック中）をクリックした際の案内モーダル。決済基盤は準備中のため、現時点では
-       案内表示のみ（実際のアンロック導線は決済基盤の実装後に追加）。 -->
-  <div id="premium-locked-modal" class="hidden">
-    <div class="modal-content">
-      <h2>🔒 Pro機能</h2>
-      <p class="note">この機能はProプラン加入者向けの有料機能です。メニューバーの「会員登録」からログインし、加入状況の反映・お申し込み（購入）ができます。詳しくは「使い方/注記」の「有料機能」タブをご覧ください。</p>
-      <div class="modal-actions">
-        <button id="premium-locked-open-help-btn">使い方/注記を見る</button>
-        <button id="premium-locked-close-btn">閉じる</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 初回起動時に自動表示する案内ポップアップ。要点のみ端的に表示し、「使い方/注記」への導線を示す。
-       ヘルプメニュー「初回案内をもう一度見る」からも再表示できる。 -->
-  <div id="welcome-modal" class="hidden">
-    <div class="modal-content welcome-modal-content">
-      <h2>👋 はじめに</h2>
-      <p class="note">
-        このアプリには非公式機能（Drops進捗確認・各種フォロー一覧の取得など）が含まれ、配信サイト側の仕様変更で
-        動作しなくなる場合があります。ご利用前に「使い方/注記」で各機能の詳細・既知の制約をご確認ください。
-      </p>
-      <ul>
-        <li>📡 配信チェック・🗂 全タブ統合・🎲 ザッピング・Drops自動追加/削除は<strong>Pro機能（有料）</strong>です。</li>
-        <li>それ以外の複数配信の同時視聴・チャット統合（タブ）・スタンプ・個別音量調整などは無料でご利用いただけます。</li>
-      </ul>
-      <div class="modal-actions">
-        <button id="welcome-open-help-btn">使い方/注記を見る</button>
-        <button id="welcome-close-btn">閉じる</button>
-      </div>
-    </div>
-  </div>
+  <!-- フィードバック・Pro機能ロック案内・初回案内の3モーダルは2026-08-07、配信を消さない
+       オーバーレイ方式（openOverlayPanel、src/renderer/overlay-panel/配下）へ移植済み。
+       DOMはそちらへ移したため、ここには残していない（MCD大規模アプデ:
+       配信を消さないオーバーレイ方式への移行）。 -->
 
   <div id="settings-modal" class="hidden">
     <div class="modal-content">
@@ -528,6 +441,11 @@
        タイルのドラッグ移動・端リサイズはBrowserView側に注入したプリロードが処理するため、
        ここには枠・ハンドル等のHTML要素は不要。 -->
   <main id="view-area"></main>
+
+  <!-- タイル情報帯（配信者名・タイトル・視聴者数・配信時間、2026-08-07新設）。各タイルの
+       streamView(配信映像)直下に、main.js側から push される矩形(tile:bar-bounds)に合わせて
+       renderer.jsが動的に生成するdivをここへ追加する。配信サイト側のページには一切手を加えない。 -->
+  <div id="tile-info-bars"></div>
 
   <script src="renderer.js"></script>
 </body>

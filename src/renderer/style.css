@@ -9,10 +9,21 @@
 }
 
 :root {
-  /* #app-menu-bar (26px) + #control-bar (84px) + #status-bar (22px)。main.jsのHEADER_HEIGHTと一致させること。 */
-  --header-height: 132px;
+  /* #app-menu-bar (26px) + #control-bar (84px)。2026-08-07: #status-bar(22px)は廃止し
+     menu-bar行内の#status-indicatorに統合したため、132pxから110pxに変更（その分タイル表示領域が拡大）。
+     main.jsのHEADER_HEIGHTと一致させること。 */
+  --header-height: 110px;
   /* 全タブ統合チャットのコメント本文フォント。空/未設定時はinherit（＝配信者名等と同じ既定フォント＝実質Twitchの見た目）。 */
   --comment-font-family: inherit;
+
+  /* ---- ブランドカラー（#9/#10対応、2026-08-07追加） ----
+     公式サイト(https://mumeinoapp.pages.dev/)のブルー〜シアングラデーション・角丸多めの
+     見た目に合わせる方針で導入。既存の紫(#9147ff、Twitchブランドカラー)は汎用button等
+     広範囲で使われているため今回は変更せず、プルダウン・スクロールバーなど今回のスコープの
+     要素にのみこのブランドカラーを適用する（全面リブランドは別途#16等でユーザーと相談）。 */
+  --brand-blue: #4f8cff;
+  --brand-cyan: #22d3ee;
+  --brand-gradient: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%);
 }
 
 body {
@@ -127,6 +138,18 @@ body {
   background: #3a3a42;
 }
 
+/* #6対応: 通知タブの一覧は件数が増えると縦に長くなりうるためスクロール化する。
+   項目は配信開始日時付きの長めのテキストになるためnowrap解除。 */
+#notifications-menu-dropdown {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+#notifications-menu-dropdown .menu-bar-dropdown-item {
+  white-space: normal;
+  max-width: 320px;
+}
+
 /* コンテンツを上詰めにし、下の境界線と被らないよう下側にだけ余白を残す
    （以前はalign-items:centerで上下均等の余白になっていたが、上側の余白が目立って見えるとの
    指摘を受けて上詰めに変更）。 */
@@ -176,6 +199,7 @@ body {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+  scrollbar-color: var(--brand-blue) transparent; /* Firefox向け（#10対応） */
   /* 横スクロールバー分の高さをチップの行と競合させないよう、下側にあらかじめ確保しておく
    （scrollbar-widthを指定していてもレイアウト上の占有幅までは自動確保されないブラウザがあり、
    確保しないとチップ名とスクロールバーが重なって見える不具合が起きていたため明示的に padding-bottom を取る）。 */
@@ -191,20 +215,25 @@ body {
 }
 
 #channel-chips::-webkit-scrollbar-thumb {
-  background: #46464f;
-  border-radius: 3px;
+  background: var(--brand-gradient);
+  border-radius: 999px;
 }
 
-/* 操作ボタン群。2行×5列のグリッドで、HTML記載順に上段→下段の順に詰まる
-   （上段=視聴コンテンツ系、下段=運用・設定系のカテゴリ分け。ドラッグ&ドロップで並び替え可能、renderer.js参照）。
+#channel-chips::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #6ea1ff 0%, #4de8ff 100%);
+}
+
+/* 操作ボタン群。2行×4列のグリッドで、HTML記載順に上段→下段の順に詰まる
+   （上段=共有・Drops・スタンプ・チャット統合、下段=ザッピング・配信チェック・自動整列・設定。
+   ドラッグ&ドロップで並び替え可能、renderer.js参照）。
    将来の有料機能はこの並びの右寄りに追加していく想定（無料機能を左、有料機能を右にする方針）。
-   列数はボタン総数(9個)÷2を切り上げた値に合わせている。ボタンの増減時はここも調整すること
+   列数はボタン総数(8個)÷2を切り上げた値に合わせている。ボタンの増減時はここも調整すること
    （固定2行を保つため、列数 = ceil(ボタン総数 / 2)。ここを更新し忘れると3行目にはみ出す）。 */
 #action-buttons {
   flex-shrink: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: repeat(5, max-content);
+  grid-template-columns: repeat(4, max-content);
   grid-template-rows: repeat(2, minmax(0, 1fr));
   grid-auto-flow: row;
   align-content: start;
@@ -270,14 +299,31 @@ body {
   font-size: 12px;
 }
 
-/* ヘッダー下の細い通知バー（Drops進捗など） */
-#status-bar {
-  height: 22px;
+/* 通知/エラー表示（旧#status-bar。ヘッダー直下の横幅いっぱいの帯だったものをmenu-bar行の
+   右端に統合、2026-08-07変更）。#app-menu-bar(高さ26px)に収まる高さで、中身が空の間は
+   幅0に畳んで場所を取らないようにする（他のmenu-bar-itemと違い常時同じ幅を占有しない）。 */
+#status-indicator {
   display: flex;
   align-items: center;
+  /* #app-menu-barの各項目は左詰めのため、margin-left:autoで残りの空きを吸収してウィンドウの
+     右端に寄せる（要望「メニューバー行の右端」を文字通り実現するため）。 */
+  margin-left: auto;
+  max-width: 0;
+  overflow: hidden;
+  color: #e4e4e7;
+  font-size: 12px;
+  white-space: nowrap;
+  transition: max-width 0.15s ease;
+}
+
+#status-indicator.has-text {
+  max-width: 320px;
   padding: 0 12px;
-  background: #1a1a1e;
-  border-bottom: 1px solid #303038;
+}
+
+#status-indicator #drops-progress-result {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 input[type="text"] {
@@ -287,6 +333,18 @@ input[type="text"] {
   padding: 6px 10px;
   border-radius: 4px;
 }
+
+/* #13対応: チャンネル名入力欄の履歴UI。矢印キー方式ではなく、入力欄の下に一覧を出し、
+   各行の右に×ボタンを付けて個別削除できるようにした（renderer.js
+   setupChannelNameHistoryDropdown参照。保存自体は既存のinputHistories/history:*を流用）。 */
+.channel-input-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* チャンネル名履歴ドロップダウンの中身は2026-08-07よりfloating-dropdown（専用BrowserView、
+   src/renderer/floating-dropdown/floating-dropdown.css）側で描画するようになったため、
+   .input-history-dropdown 系スタイルはここから削除した（メインウィンドウのDOMには存在しない）。 */
 
 button {
   background: #9147ff;
@@ -365,16 +423,75 @@ button:hover:not(:disabled) {
 }
 
 #drops-progress-result {
-  font-size: 12px;
-  color: #adadb8;
-  /* #status-bar は高さ固定（main.jsのHEADER_HEIGHTと同期必須）のため折り返しはできない。
-     その代わり横幅は#status-bar全体まで使い、hoverで全文をネイティブツールチップ表示する
-     （setStatusBannerでtitle属性にも同じ文字列を設定）。 */
+  /* #status-indicator（menu-bar行）が高さ固定のため折り返しはできない。
+     その代わり#status-indicator.has-textのmax-width(320px)まで使い、hoverで全文を
+     ネイティブツールチップ表示する（setStatusBannerでtitle属性にも同じ文字列を設定）。 */
+  white-space: nowrap;
+}
+
+/* タイル情報帯（配信者名・タイトル・視聴者数・配信時間、2026-08-07新設）。
+   配信映像(streamView, BrowserView)はホストDOMより手前に描画されるため、streamViewのbounds
+   を縮めて空けた隙間に、この帯をposition:fixedでちょうど重ねて表示する（座標はmain.js側の
+   applyTileBoundsFromRectから毎回pushされる、tile:bar-bounds参照）。 */
+#tile-info-bars {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+}
+
+#tile-info-bars.bars-hidden {
+  display: none;
+}
+
+.tile-info-bar {
+  position: fixed;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  background: rgba(20, 20, 24, 0.85);
+  color: #d7e6ff;
+  overflow: hidden;
+  white-space: nowrap;
+  /* streamViewのbounds縮小で生まれた隙間に重なるこの帯自体がBrowserViewの外側になるため、
+     ここを掴んでのタイル移動/リサイズ（下端リサイズ）をrenderer.js側で処理できるよう
+     マウスイベントを受け取る（クリック透過にしない）。cursorはrenderer.jsがJSで動的に変える。 */
+  pointer-events: auto;
+  cursor: move;
+}
+
+.tile-info-bar .tile-info-bar-name {
+  flex: none;
+  font-weight: 600;
+  color: #efeff1;
+}
+
+.tile-info-bar .tile-info-bar-title {
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: #b9c6da;
+}
+
+.tile-info-bar .tile-info-bar-category {
+  flex: none;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #9ad1c7;
+}
+
+.tile-info-bar .tile-info-bar-category:empty {
+  display: none;
+}
+
+.tile-info-bar .tile-info-bar-stats {
+  flex: none;
+  color: #d7e6ff;
 }
 
 #view-area {
@@ -1035,73 +1152,9 @@ button:hover:not(:disabled) {
   flex-shrink: 0;
 }
 
-/* ---- 音量ミキサー（ストリームごとの個別音量調整） ---- */
-
-/* 音量ミキサーは「🔊 音量」ボタン直下に垂れるドロップダウン形式（他のサイドパネルのような
-   全高パネル・タイル領域縮小ではなく、必要な時だけ出す最前面のコンパクトな吹き出し風UI）。
-   常に画面右上（ヘッダー直下）固定表示で、他のサイドパネルの開閉状態に影響されない
-   （renderer.jsのSIDE_PANEL_ELEMENTSには含めていない）。BrowserViewは常にHTMLより手前に
-   描画されるため、実際に「最前面」に見せるための重なり回避処理はmain.js側
-   （applyVolumeDropdownOverlapHiding）で行っている。 */
-#volume-mixer-panel {
-  position: fixed;
-  top: var(--header-height);
-  right: 0;
-  width: 190px;
-  max-height: 260px;
-  background: #1f1f23;
-  border: 1px solid #303038;
-  border-radius: 0 0 8px 8px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
-  /* 設定(1000)・ザッピング(1000)・チャット統合/スタンプ(900)など他の全パネルより手前に
-     出したいため、それらより高い値にしている（他パネルを開いたまま音量ミキサーだけ
-     later開いても隠れないように）。 */
-  z-index: 1100;
-  overflow-y: auto;
-}
-
-#volume-mixer-panel.hidden { display: none; }
-
-#volume-mixer-list {
-  display: flex;
-  flex-direction: column;
-  padding: 4px;
-}
-
-/* 行はチャンネル名＋アイコン＋スライダーのみのシンプル構成（1行に収める） */
-.volume-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 6px;
-  border-radius: 4px;
-}
-
-.volume-row:hover {
-  background: #2c2c35;
-}
-
-.volume-row .volume-icon {
-  cursor: pointer;
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.volume-row .volume-row-name {
-  font-size: 11px;
-  width: 52px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.volume-row input[type="range"] {
-  flex: 1;
-  min-width: 0;
-  accent-color: #9147ff;
-  cursor: pointer;
-}
+/* 音量ミキサーは2026-08-07セッションでfloating-dropdown基盤（BrowserView方式）へ移植済み。
+   旧#volume-mixer-panel/.volume-row系のスタイルは
+   src/renderer/floating-dropdown/floating-dropdown.css へ移設した。 */
 
 /* ---- チャット統合パネル（タブ切替 / 時系列統合） ----
    上部（見出し・モード切替・タブ一覧）はHTML固定高さ、下部はタブモード時にmain.js側の
@@ -1163,6 +1216,7 @@ button:hover:not(:disabled) {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+  scrollbar-color: var(--brand-blue) transparent; /* Firefox向け（#10対応） */
   box-sizing: border-box;
 }
 
@@ -1175,12 +1229,19 @@ button:hover:not(:disabled) {
 }
 
 .chat-integration-tabs::-webkit-scrollbar-thumb {
-  background: #46464f;
-  border-radius: 3px;
+  background: var(--brand-gradient);
+  border-radius: 999px;
+}
+
+.chat-integration-tabs::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #6ea1ff 0%, #4de8ff 100%);
 }
 
 .chat-integration-tabs .chat-tab {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   background: #2c2c35;
   border-radius: 10px;
   padding: 3px 10px;
@@ -1192,18 +1253,61 @@ button:hover:not(:disabled) {
   background: #9147ff;
 }
 
+/* #7対応: 全タブ統合（時系列）表示対象のON/OFFトグル。チップ側の.chat-toggleと見た目を揃える。 */
+.chat-integration-tabs .chat-tab-toggle {
+  cursor: pointer;
+  opacity: 0.55;
+  font-size: 11px;
+}
+
+.chat-integration-tabs .chat-tab-toggle.active {
+  opacity: 1;
+}
+
 /* 時系列統合モードでもタブは隠さない。チャット送信先チャンネルの選択に使う
    （送信欄chat-integration-send-rowと連動、選択中はハイライト表示される）。 */
 
-.chat-integration-timeline {
+/* タイムライン本体と「↓ 最新へ」ジャンプボタンをまとめるラッパー。ラッパー自体を
+   position:relative にして、ボタンをタイムライン内の右下に絶対配置で重ねて表示する。 */
+.chat-integration-timeline-wrap {
   flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.chat-integration-timeline-wrap.hidden { display: none; }
+
+.chat-integration-timeline {
+  position: absolute;
+  inset: 0;
   overflow-y: auto;
   padding: 10px;
   font-size: 15px;
   line-height: 1.6;
 }
 
-.chat-integration-timeline.hidden { display: none; }
+/* スクロール位置が一番下ではなく少しでも上になっている間だけ表示され、クリックで
+   最新のチャット表示位置（一番下）まで即座に戻れる。 */
+.chat-integration-jump-bottom-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  background: #9147ff;
+  color: #fff;
+  border: none;
+  border-radius: 14px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  z-index: 5;
+}
+
+.chat-integration-jump-bottom-btn:hover {
+  background: #7d2ff2;
+}
+
+.chat-integration-jump-bottom-btn.hidden { display: none; }
 
 .chat-integration-timeline .chat-line {
   margin-bottom: 7px;
@@ -1231,6 +1335,58 @@ button:hover:not(:disabled) {
   width: auto;
   vertical-align: middle;
   margin: 0 1px;
+}
+
+/* クリップURLの代わりに表示するカード（Twitch本家同様、サムネ＋クリックで開く）。
+   実際の外部URLへの遷移はrenderer.js側でクリックを検知し、main.jsのclips:open-externalへ
+   委譲する（ホスト名検証込み）ため、ここではあくまで見た目のみ。 */
+.chat-integration-timeline .chat-clip-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 3px 0;
+  padding: 4px 8px 4px 4px;
+  background: #2c2c35;
+  border: 1px solid #3d3d47;
+  border-radius: 8px;
+  cursor: pointer;
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+.chat-integration-timeline .chat-clip-card:hover {
+  border-color: #9147ff;
+}
+
+.chat-integration-timeline .chat-clip-thumb-wrap {
+  flex-shrink: 0;
+  width: 64px;
+  height: 36px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #1a1a1f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-integration-timeline .chat-clip-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.chat-integration-timeline .chat-clip-thumb-placeholder {
+  font-size: 16px;
+}
+
+.chat-integration-timeline .chat-clip-label {
+  font-size: 12px;
+  color: #d0d0d8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
 }
 
 .chat-integration-send-row {
@@ -1307,10 +1463,160 @@ button:hover:not(:disabled) {
   max-width: none;
 }
 
+/* ---- Dropsハブ（依頼#15、旧3ボタン統合先）---- */
+/* unified-feed-modalと同じ右側サイドパネル形式 */
+
+#drops-hub-modal.hidden { display: none; }
+
+#drops-hub-modal {
+  position: fixed;
+  top: var(--header-height);
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  background: #1f1f23;
+  border-left: 1px solid #303038;
+  z-index: 1000;
+  overflow-y: auto;
+}
+
+#drops-hub-modal .modal-content {
+  background: transparent;
+  padding: 16px;
+  border-radius: 0;
+  max-width: none;
+}
+
+/* premiumUnlockedがfalseの間、Drops自動追加/削除の「追加」ボタンにロック表示を適用
+   （applyPremiumLockUiStates内の個別トグルでrenderer.jsからlockedクラスを付与。
+   PRO_BUTTON_IDS配列には含まれていない＝ボタン自体は無料開放で、追加/削除操作のみガード）。
+   セクション自体は表示したまま、追加操作のみブロックする方式。 */
+#drops-auto-add-btn.locked {
+  opacity: 0.6;
+}
+
+#drops-auto-add-btn.locked::before {
+  content: '🔒 ';
+}
+
 /* ---- タイル自由配置・自由リサイズ（ウィンドウマネージャー相当） ----
    実際のドラッグ移動／端リサイズは配信・チャットのBrowserView側（プリロード注入）で処理するため、
    枠やハンドルのCSSはここでは不要。 */
 
 #layout-auto-arrange-btn {
   background: #3a3a45;
+}
+
+/* ---- 依頼#9: プラットフォーム選択プルダウンのオリジナルUI化（2026-08-07） ----
+   channel-platform-select（チャンネル追加欄のTwitch/YouTube/Kick選択、index.html参照）限定。
+   ネイティブ<select>のキーボード操作・アクセシビリティ・OSネイティブなポップアップ位置決めは
+   維持しつつ、appearance:noneと二重グラデーションの矢印でブランドカラーの見た目に変更する
+   （完全自作のdiv+ulドロップダウンにはしない。他のselect(emotes/zapping/pro-checkout/
+   comment-font)は今回のスコープ外のため変更しない）。 */
+#channel-platform-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #23232b;
+  border: 1px solid rgba(79, 140, 255, 0.4);
+  border-radius: 10px;
+  color: #efeff1;
+  padding: 6px 26px 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, #22d3ee 50%),
+    linear-gradient(135deg, #22d3ee 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) center,
+    calc(100% - 10px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#channel-platform-select:hover {
+  border-color: var(--brand-blue);
+}
+
+#channel-platform-select:focus {
+  outline: none;
+  border-color: var(--brand-cyan);
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.25);
+}
+
+/* ---- 依頼#10: 縦スクロールバーのオリジナルUI化（2026-08-07） ----
+   横スクロールの#channel-chips/.chat-integration-tabsは既にこのファイル前半でブランド
+   グラデーション化済み。ここでは縦スクロール(overflow-y:auto)を持つ主要なパネル/モーダル群を
+   まとめてブランドカラーのスクロールバーに統一する。純粋に見た目の変更のみで、各要素の
+   機能・レイアウト（幅・高さ・overflow指定自体）には一切手を加えていない。 */
+#settings-modal,
+.help-modal-content,
+.pro-auth-modal-content,
+#emotes-panel,
+#layout-share-panel,
+#unified-feed-list,
+#auto-tune-in-all-list,
+.chat-integration-timeline,
+#zapping-modal,
+#unified-feed-modal,
+#drops-hub-modal {
+  scrollbar-width: thin;
+  scrollbar-color: var(--brand-blue) transparent; /* Firefox向け */
+}
+
+#settings-modal::-webkit-scrollbar,
+.help-modal-content::-webkit-scrollbar,
+.pro-auth-modal-content::-webkit-scrollbar,
+#emotes-panel::-webkit-scrollbar,
+#layout-share-panel::-webkit-scrollbar,
+#unified-feed-list::-webkit-scrollbar,
+#auto-tune-in-all-list::-webkit-scrollbar,
+.chat-integration-timeline::-webkit-scrollbar,
+#zapping-modal::-webkit-scrollbar,
+#unified-feed-modal::-webkit-scrollbar,
+#drops-hub-modal::-webkit-scrollbar {
+  width: 8px;
+}
+
+#settings-modal::-webkit-scrollbar-track,
+.help-modal-content::-webkit-scrollbar-track,
+.pro-auth-modal-content::-webkit-scrollbar-track,
+#emotes-panel::-webkit-scrollbar-track,
+#layout-share-panel::-webkit-scrollbar-track,
+#unified-feed-list::-webkit-scrollbar-track,
+#auto-tune-in-all-list::-webkit-scrollbar-track,
+.chat-integration-timeline::-webkit-scrollbar-track,
+#zapping-modal::-webkit-scrollbar-track,
+#unified-feed-modal::-webkit-scrollbar-track,
+#drops-hub-modal::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#settings-modal::-webkit-scrollbar-thumb,
+.help-modal-content::-webkit-scrollbar-thumb,
+.pro-auth-modal-content::-webkit-scrollbar-thumb,
+#emotes-panel::-webkit-scrollbar-thumb,
+#layout-share-panel::-webkit-scrollbar-thumb,
+#unified-feed-list::-webkit-scrollbar-thumb,
+#auto-tune-in-all-list::-webkit-scrollbar-thumb,
+.chat-integration-timeline::-webkit-scrollbar-thumb,
+#zapping-modal::-webkit-scrollbar-thumb,
+#unified-feed-modal::-webkit-scrollbar-thumb,
+#drops-hub-modal::-webkit-scrollbar-thumb {
+  background: var(--brand-gradient);
+  border-radius: 999px;
+}
+
+#settings-modal::-webkit-scrollbar-thumb:hover,
+.help-modal-content::-webkit-scrollbar-thumb:hover,
+.pro-auth-modal-content::-webkit-scrollbar-thumb:hover,
+#emotes-panel::-webkit-scrollbar-thumb:hover,
+#layout-share-panel::-webkit-scrollbar-thumb:hover,
+#unified-feed-list::-webkit-scrollbar-thumb:hover,
+#auto-tune-in-all-list::-webkit-scrollbar-thumb:hover,
+.chat-integration-timeline::-webkit-scrollbar-thumb:hover,
+#zapping-modal::-webkit-scrollbar-thumb:hover,
+#unified-feed-modal::-webkit-scrollbar-thumb:hover,
+#drops-hub-modal::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #6ea1ff 0%, #4de8ff 100%);
 }

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!--
+  汎用フローティングドロップダウン基盤（MCD大規模アプデ、2026-08-07新設）のシェルHTML。
+  overlay-panel/index.html と同じ考え方（?panel=<id> で出し分け）だが、こちらは
+  「配信タイルの幅は一切変更せず、可変の小さな矩形にBrowserViewを重ねて表示する」
+  ドロップダウン専用（チャンネル名履歴・音量ミキサー等）。
+  実機確認で「ファイル/表示/ヘルプ/バージョン/通知のドロップダウンが配信タイルの裏に隠れる」
+  問題が発覚したため、2026-08-07セッション内でapp-menu（自作メニューバーの小ドロップダウン）
+  もこの基盤へ移植した。
+-->
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+    <title>floating-dropdown</title>
+    <link rel="stylesheet" href="floating-dropdown.css" />
+  </head>
+  <body>
+    <div id="channel-history-root" class="floating-dropdown-root hidden"></div>
+    <div id="app-menu-root" class="floating-dropdown-root hidden"></div>
+    <div id="volume-mixer-root" class="floating-dropdown-root hidden"></div>
+  </body>
+  <script src="floating-dropdown.js"></script>
+</html>

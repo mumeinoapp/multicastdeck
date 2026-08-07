@@ -5,29 +5,29 @@ const channelPlatformSelect = document.getElementById('channel-platform-select')
 const addChannelBtn = document.getElementById('add-channel-btn');
 const channelChips = document.getElementById('channel-chips');
 
-const dropsToggleBtn = document.getElementById('drops-toggle-btn');
-const dropsProgressBtn = document.getElementById('drops-progress-btn');
+// 依頼#15でTwitch Drops開閉・進捗確認・Kick Drops開閉の3ボタンを単一のDropsハブボタン+パネルに統合。
+// #drops-progress-resultはDrops専用ではなく他のエラー通知とも共有するステータス表示のため、
+// そちらは維持しつつ、進捗確認結果自体はパネル内の専用要素(#drops-hub-progress-result)に出す。
 const dropsProgressResult = document.getElementById('drops-progress-result');
-const kickDropsToggleBtn = document.getElementById('kick-drops-toggle-btn');
+// 2026-08-07: 旧#status-bar（ヘッダー下の全幅帯）を廃止し、menu-bar行右端の#status-indicatorに統合。
+const statusIndicator = document.getElementById('status-indicator');
+const dropsHubBtn = document.getElementById('drops-hub-btn');
+const dropsHubModal = document.getElementById('drops-hub-modal');
+const dropsHubCloseBtn = document.getElementById('drops-hub-close-btn');
+const dropsHubTwitchToggleBtn = document.getElementById('drops-hub-twitch-toggle-btn');
+const dropsHubProgressBtn = document.getElementById('drops-hub-progress-btn');
+const dropsHubProgressResult = document.getElementById('drops-hub-progress-result');
+const dropsHubKickToggleBtn = document.getElementById('drops-hub-kick-toggle-btn');
 
-// 「使い方/注記」はツールバーからは撤去し、ネイティブメニュー「ヘルプ」内の項目から開く（main.js参照）
-const helpModal = document.getElementById('help-modal');
-const helpCloseBtn = document.getElementById('help-close-btn');
-const helpTabBtns = Array.from(document.querySelectorAll('.help-tab-btn'));
-const helpTabContents = Array.from(document.querySelectorAll('[data-help-content]'));
-
-const welcomeModal = document.getElementById('welcome-modal');
-const welcomeCloseBtn = document.getElementById('welcome-close-btn');
-const welcomeOpenHelpBtn = document.getElementById('welcome-open-help-btn');
+// 「使い方/注記」「初回案内」は2026-08-07、配信を消さないオーバーレイ方式
+// （openOverlayPanel、main.js/overlay-panel参照）へ移植済み。DOM自体をindex.htmlから
+// 削除したため、ここでの要素参照・リスナー登録も不要になった。
 
 // ---- 有料機能（Pro機能）のロックUI ----
 // premiumUnlockedは会員登録ログイン後の/statusレスポンス（Stripe決済状況）で決まる
 // （main.jsのrefreshProAuthStatus参照）。開発者本人のメールでログインした場合のみ、
 // main.js側で決済状況によらず自動でtrueになる。
 const PRO_BUTTON_IDS = ['zapping-btn', 'unified-feed-btn'];
-const premiumLockedModal = document.getElementById('premium-locked-modal');
-const premiumLockedCloseBtn = document.getElementById('premium-locked-close-btn');
-const premiumLockedOpenHelpBtn = document.getElementById('premium-locked-open-help-btn');
 let premiumUnlocked = false;
 
 function applyPremiumLockUiStates() {
@@ -35,22 +35,18 @@ function applyPremiumLockUiStates() {
     document.getElementById(id)?.classList.toggle('locked', !premiumUnlocked);
   });
   chatIntegrationModeTimelineBtn?.classList.toggle('locked', !premiumUnlocked);
+  // 依頼#15: Dropsハブパネル自体は無料開放だが、パネル内のDrops自動追加/削除だけは
+  // 引き続きPro限定（元は配信チェックのPro機能内にあったため）。ロック中は「追加」ボタンに
+  // 🔒表示を出す（実際のクリック制御はdropsAutoAddBtn/removeボタンのハンドラ側で行う）。
+  document.getElementById('drops-auto-add-btn')?.classList.toggle('locked', !premiumUnlocked);
 }
 
+// 2026-08-07: 配信を消さないオーバーレイ方式（openOverlayPanel）へ移植済み。
+// 中身（DOM・タブ切り替え・「使い方/注記」への導線）はoverlay-panel/overlay-panel.jsへ
+// そのまま移した（見た目・挙動は変えていない）。
 async function showPremiumLockedModal() {
-  await window.api.hideContentViews();
-  premiumLockedModal.classList.remove('hidden');
+  await window.api.openOverlayPanel('premium-locked');
 }
-premiumLockedCloseBtn.addEventListener('click', async () => {
-  premiumLockedModal.classList.add('hidden');
-  await window.api.showContentViews();
-});
-premiumLockedOpenHelpBtn.addEventListener('click', async () => {
-  premiumLockedModal.classList.add('hidden');
-  helpModal.classList.remove('hidden');
-  helpTabBtns.forEach((b) => b.classList.toggle('active', b.dataset.helpTab === 'premium'));
-  helpTabContents.forEach((c) => c.classList.toggle('hidden', c.dataset.helpContent !== 'premium'));
-});
 window.api.onPremiumChanged((value) => {
   premiumUnlocked = !!value;
   applyPremiumLockUiStates();
@@ -136,7 +132,256 @@ async function refreshChips() {
   setupChipDragReorder();
   setupChipNameMarquee();
   refreshEmoteChannelOptions();
+  updateChipMetaBadges();
 }
+
+// updateChipMetaBadges()のfetchAllStreamMeta()呼び出しはKick分がBrowserView生成を伴い重いため、
+// refreshChips()（ドラッグ&ドロップ・チャットトグル等、頻繁に呼ばれうる箇所11箇所から呼ばれる）
+// のたびに毎回叩き直さないよう、直近の取得結果を短時間キャッシュしてスロットリングする。
+let streamMetaCache = {};
+let streamMetaLastFetchAt = 0;
+const STREAM_META_MIN_REFETCH_MS = 5000;
+
+/** 配信開始時刻（ISO8601文字列）から現在までの経過時間を "1:23:45" / "23:45" 形式で返す。無効な値ならnull。 */
+function formatElapsedStreamTime(startedAtIso) {
+  if (!startedAtIso) return null;
+  const startedMs = new Date(startedAtIso).getTime();
+  if (Number.isNaN(startedMs)) return null;
+  const diffSec = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+  const h = Math.floor(diffSec / 3600);
+  const m = Math.floor((diffSec % 3600) / 60);
+  const s = diffSec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+/**
+ * 直近取得済みのstreamMetaCacheを使って、チップの視聴者数バッジ・ツールチップ
+ * （タイトル・カテゴリ・視聴者数・配信経過時間）を再描画する。ネットワークアクセスは行わない
+ * （経過時間だけは毎秒再計算する必要があるため、取得処理とDOM反映を分離している）。
+ * refreshChips()と違いチップDOM自体は再構築せず、既存の.viewer-badge要素とtitle属性だけを
+ * 差し替える（マーキーアニメーションの再生状態やドラッグ中の状態を壊さないため）。
+ */
+function applyStreamMetaToChips() {
+  const meta = streamMetaCache;
+  channelChips.querySelectorAll('.chip').forEach((chip) => {
+    const name = chip.dataset.name;
+    const badge = chip.querySelector('.viewer-badge');
+    const info = meta[name];
+    if (!info) {
+      if (badge) {
+        badge.textContent = '';
+        badge.classList.add('pending');
+        badge.title = '';
+      }
+      chip.removeAttribute('title');
+      return;
+    }
+    const compactViewers =
+      info.viewerCount >= 10000
+        ? `${(info.viewerCount / 10000).toFixed(1)}万`
+        : info.viewerCount.toLocaleString();
+    const elapsed = formatElapsedStreamTime(info.startedAt);
+    if (badge) {
+      badge.textContent = `👁 ${compactViewers}${elapsed ? ` ・⏱${elapsed}` : ''}`;
+      badge.classList.remove('pending');
+    }
+    const detailParts = [];
+    if (info.title) detailParts.push(info.title);
+    if (info.gameName) detailParts.push(`カテゴリ: ${info.gameName}`);
+    detailParts.push(`視聴者数: ${info.viewerCount.toLocaleString()}人`);
+    if (elapsed) detailParts.push(`配信時間: ${elapsed}`);
+    const detail = detailParts.join('\n');
+    chip.title = detail;
+    if (badge) badge.title = detail;
+  });
+}
+
+// ---- タイル情報帯（配信者名・タイトル・視聴者数・配信時間、2026-08-07新設） ----
+// 配信サイト側のページには一切手を加えず、各タイルのstreamView(配信映像)直下に
+// アプリ自身が作るHTML帯を重ねて表示する。矩形はmain.js側(applyTileBoundsFromRect)から
+// tile:bar-bounds イベントで都度pushされ、中身のテキストはチップと同じstreamMetaCacheを
+// 再利用する（新規の取得処理は行わない）。
+const tileInfoBarsContainer = document.getElementById('tile-info-bars');
+const tileBarEls = new Map(); // channelName -> HTMLElement
+
+function ensureTileBarEl(channel) {
+  let el = tileBarEls.get(channel);
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'tile-info-bar';
+    el.dataset.name = channel;
+    el.innerHTML = `
+      <span class="tile-info-bar-name"></span>
+      <span class="tile-info-bar-title"></span>
+      <span class="tile-info-bar-category"></span>
+      <span class="tile-info-bar-stats"></span>
+    `;
+    tileInfoBarsContainer.appendChild(el);
+    tileBarEls.set(channel, el);
+  }
+  return el;
+}
+
+window.api.onTileBarBounds((rect) => {
+  const el = ensureTileBarEl(rect.channel);
+  el.style.left = `${rect.x}px`;
+  el.style.top = `${rect.y}px`;
+  el.style.width = `${rect.width}px`;
+  el.style.height = `${rect.height}px`;
+});
+
+window.api.onTileBarRemove((channel) => {
+  const el = tileBarEls.get(channel);
+  if (el) {
+    el.remove();
+    tileBarEls.delete(channel);
+  }
+});
+
+window.api.onTileBarsVisible((visible) => {
+  tileInfoBarsContainer.classList.toggle('bars-hidden', !visible);
+});
+
+// ---- タイル情報帯を掴んでのドラッグ移動／下端リサイズ ----
+// tile-info-bar はstreamViewのbounds縮小で生まれた隙間に重なるホストウィンドウ側のHTMLで、
+// BrowserView本体（tileInteractionPreload.jsがmousedown等を検知）の外側にある。
+// 従来はこの帯にドラッグ検知が一切配線されておらず、streamViewの下端（従来はここがドラッグの
+// 掴みどころだった）を掴んだつもりが実際にはこの帯の上でmousedownしてしまい、ドラッグが
+// 開始しない、または開始直後にポインタがBrowserView外（＝この帯の上）へ抜けてmousemoveが
+// 届かなくなり即座に外れる、という不具合が起きていた。BrowserView側と同じ
+// tile-interaction:start/move/end プロトコルをホストウィンドウ側からも発行することで解消する。
+const TILE_INFO_BAR_RESIZE_EDGE_PX = 6;
+let infoBarDragging = false;
+let infoBarRafPending = false;
+let infoBarLatestPoint = null;
+
+function infoBarResizeZone(el, clientY) {
+  const rect = el.getBoundingClientRect();
+  return clientY >= rect.bottom - TILE_INFO_BAR_RESIZE_EDGE_PX ? 's' : '';
+}
+
+tileInfoBarsContainer.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  const el = e.target.closest('.tile-info-bar');
+  if (!el) return;
+  const channel = el.dataset.name;
+  if (!channel) return;
+  const dir = infoBarResizeZone(el, e.clientY);
+  infoBarDragging = true;
+  document.body.style.cursor = dir ? 'ns-resize' : 'move';
+  window.api.startTileInteraction({
+    channel,
+    origin: 'stream',
+    type: dir ? 'resize' : 'move',
+    dir,
+    screenX: e.screenX,
+    screenY: e.screenY,
+  });
+});
+
+tileInfoBarsContainer.addEventListener('mousemove', (e) => {
+  if (infoBarDragging) return;
+  const el = e.target.closest('.tile-info-bar');
+  document.body.style.cursor = el && infoBarResizeZone(el, e.clientY) ? 'ns-resize' : '';
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!infoBarDragging) return;
+  infoBarLatestPoint = { x: e.screenX, y: e.screenY };
+  if (!infoBarRafPending) {
+    infoBarRafPending = true;
+    requestAnimationFrame(() => {
+      infoBarRafPending = false;
+      if (infoBarDragging && infoBarLatestPoint) {
+        window.api.moveTileInteraction(infoBarLatestPoint);
+      }
+    });
+  }
+});
+
+function endInfoBarDrag() {
+  if (!infoBarDragging) return;
+  infoBarDragging = false;
+  infoBarLatestPoint = null;
+  document.body.style.cursor = '';
+  window.api.endTileInteraction();
+}
+window.addEventListener('mouseup', endInfoBarDrag);
+window.addEventListener('blur', endInfoBarDrag);
+
+/**
+ * streamMetaCache（チップと共有）を使って、タイル情報帯の表示内容を更新する。
+ * YouTubeはfetchAllStreamMeta非対応（既存の意図的な仕様）のため配信者名のみ表示し、
+ * タイトル・視聴者数・経過時間の欄は空のままにする（「取得不可」等のノイズ文言は出さない）。
+ */
+function applyStreamMetaToTileBars() {
+  const meta = streamMetaCache;
+  tileBarEls.forEach((el, channel) => {
+    // 削除済みチャンネル（tile:bar-removeの取りこぼし対策の後始末、二重化しておく）
+    if (!currentChannels.includes(channel)) {
+      el.remove();
+      tileBarEls.delete(channel);
+      return;
+    }
+    const nameEl = el.querySelector('.tile-info-bar-name');
+    const titleEl = el.querySelector('.tile-info-bar-title');
+    const categoryEl = el.querySelector('.tile-info-bar-category');
+    const statsEl = el.querySelector('.tile-info-bar-stats');
+    nameEl.textContent = channel;
+
+    const isYoutube = currentChannelPlatforms[channel] === 'youtube';
+    if (isYoutube) {
+      titleEl.textContent = '';
+      categoryEl.textContent = '';
+      statsEl.textContent = '';
+      return;
+    }
+
+    const info = meta[channel];
+    if (!info) {
+      titleEl.textContent = '';
+      categoryEl.textContent = '';
+      statsEl.textContent = '';
+      return;
+    }
+    const compactViewers =
+      info.viewerCount >= 10000
+        ? `${(info.viewerCount / 10000).toFixed(1)}万`
+        : info.viewerCount.toLocaleString();
+    const elapsed = formatElapsedStreamTime(info.startedAt);
+    titleEl.textContent = info.title || '';
+    categoryEl.textContent = info.gameName || '';
+    statsEl.textContent = `👁${compactViewers}${elapsed ? ` ・⏱${elapsed}` : ''}`;
+  });
+}
+
+/**
+ * チップの視聴者数バッジ・ツールチップを更新する。60秒間隔の定期ポーリング（下部のsetInterval）と、
+ * チャンネル増減時等（refreshChips末尾）の両方から呼ばれる。直近取得から
+ * STREAM_META_MIN_REFETCH_MS 未満の場合は再フェッチせずキャッシュ値をDOMへ反映するだけに留める
+ * （refreshChipsの頻発呼び出しでKick BrowserViewが乱発されるのを防ぐ）。
+ */
+async function updateChipMetaBadges() {
+  const now = Date.now();
+  if (now - streamMetaLastFetchAt >= STREAM_META_MIN_REFETCH_MS) {
+    streamMetaLastFetchAt = now;
+    try {
+      streamMetaCache = await window.api.getStreamMeta();
+    } catch (_) {
+      // 取得失敗時は前回のキャッシュのまま据え置く（バッジを崩さない）
+    }
+  }
+  applyStreamMetaToChips();
+  applyStreamMetaToTileBars();
+}
+
+const CHIP_META_INTERVAL_MS = 60 * 1000;
+setInterval(updateChipMetaBadges, CHIP_META_INTERVAL_MS);
+// 配信経過時間はリアルタイム表示の要件があるため、ネットワークアクセスを伴わないDOM再描画のみを
+// 毎秒回す（取得自体は上記の60秒間隔のまま）。タイル情報帯も同じ理由で毎秒再描画する。
+setInterval(applyStreamMetaToChips, 1000);
+setInterval(applyStreamMetaToTileBars, 1000);
 
 /**
  * チャンネル名が固定幅の枠に収まりきらない場合だけ、チップにカーソルを合わせている間
@@ -290,7 +535,132 @@ function attachInputHistory(inputEl, historyKey) {
   };
 }
 
-const channelInputHistory = attachInputHistory(channelInput, 'channelName');
+// #13対応: チャンネル名入力欄の履歴だけは、矢印キーでの選択(attachInputHistory)ではなく
+// 入力欄の下に一覧を出すオリジナルUIに変更（各行の右に×ボタンで個別削除できる）。
+// Drops自動追加/削除のゲーム名入力欄（dropsAutoGameInput）は従来通り矢印キー方式のまま。
+// 汎用フローティングドロップダウン基盤（MCD大規模アプデ、2026-08-07新設）専用idと
+// このモジュール内での開閉状態。closeTopmostPanelWithEscape（Escapeキー処理）から
+// 参照できるよう、setupChannelNameHistoryDropdown内で実装を差し替える形にしてある
+// （overlay-panel.jsのactiveEscapeCloseと同じパターン）。
+const CHANNEL_HISTORY_FLOATING_ID = 'channel-history';
+let closeChannelHistoryDropdown = () => {};
+// 自作メニューバー（ファイル/表示/ヘルプ/バージョン/通知）の小ドロップダウン用（2026-08-07追加、
+// 実機確認で配信タイルの裏に隠れる問題が発覚したためfloating-dropdown化）。setupAppMenuBar内で
+// 実装を差し替える（closeChannelHistoryDropdownと同じパターン）。
+let closeAppMenuDropdowns = () => {};
+// 音量ミキサー用（2026-08-07、旧rectOverlayHiding方式からfloating-dropdown化に伴い追加）。
+// setupVolumeMixerDropdown内で実装を差し替える（closeChannelHistoryDropdownと同じパターン）。
+let closeVolumeMixerDropdown = () => {};
+
+function setupChannelNameHistoryDropdown(inputEl, historyKey) {
+  let history = [];
+  // ElectronのBrowserView（配信映像・チャット埋め込み）はネイティブ合成レイヤーのため、
+  // このドロップダウンをHTML/CSS側でどれだけ手前に置いても配信画面の裏に隠れてしまう。
+  // 以前は「ドロップダウンの矩形と重なっているタイルだけを一時退避させる」rectOverlayShow/Hide
+  // 方式を使っていたが、「配信タイルを絶対に消さない」方針への転換（2026-08-07）に伴い、
+  // ドロップダウンの中身自体を専用のBrowserView（floating-dropdown、main.js側で
+  // setTopBrowserViewにより最前面表示）で描画する方式に切り替えた。履歴データの取得・
+  // フィルタ・永続化はこれまで通りこちら側（メインウィンドウのレンダラー）で行い、
+  // floating-dropdown側には描画用の行データだけをfloatingDropdown.setContentで渡す。
+  let floatOpen = false;
+
+  async function loadHistory() {
+    history = await window.api.getInputHistory(historyKey);
+  }
+
+  function currentMatches() {
+    const q = inputEl.value.trim().toLowerCase();
+    if (!q) return history;
+    return history.filter((v) => v.toLowerCase().includes(q));
+  }
+
+  function closeDropdown() {
+    if (floatOpen) {
+      floatOpen = false;
+      window.api.floatingDropdown.close(CHANNEL_HISTORY_FLOATING_ID);
+    }
+  }
+  closeChannelHistoryDropdown = closeDropdown;
+
+  // 入力欄(.channel-input-wrap)の直下に表示する矩形をビューポート基準（BrowserViewのbounds
+  // 座標系と同じ）で計算する。高さは行数に応じて可変（旧CSSのmax-height:240pxを踏襲）。
+  function computeRect(rowCount) {
+    const wrap = inputEl.closest('.channel-input-wrap') || inputEl.parentElement;
+    const rect = wrap.getBoundingClientRect();
+    const ROW_HEIGHT = 31; // floating-dropdown.css .input-history-row のpadding込み実測相当
+    const height = Math.min(240, Math.max(ROW_HEIGHT, rowCount * ROW_HEIGHT));
+    return {
+      x: rect.left,
+      y: rect.bottom + 2,
+      width: rect.width,
+      height,
+    };
+  }
+
+  function render() {
+    const matches = currentMatches();
+    if (!matches.length) {
+      closeDropdown();
+      return;
+    }
+    const rect = computeRect(matches.length);
+    if (!floatOpen) {
+      floatOpen = true;
+      window.api.floatingDropdown.open(CHANNEL_HISTORY_FLOATING_ID, rect);
+    } else {
+      window.api.floatingDropdown.setRect(CHANNEL_HISTORY_FLOATING_ID, rect);
+    }
+    window.api.floatingDropdown.setContent(CHANNEL_HISTORY_FLOATING_ID, { rows: matches });
+  }
+
+  inputEl.addEventListener('focus', () => render());
+  inputEl.addEventListener('input', () => render());
+  // floating-dropdown側の行をクリックすると、別BrowserViewへOSレベルのフォーカスが移るため
+  // inputElのblurは通常通り発火する。closeDropdown()はBrowserViewをremoveBrowserViewする
+  // だけでwebContents自体は破棄しないため、この直後にfloating-dropdown側から届く
+  // select/removeイベント（下記onEvent参照）は問題なく処理できる。
+  inputEl.addEventListener('blur', () => closeDropdown());
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeDropdown();
+  });
+  window.addEventListener('resize', () => {
+    if (floatOpen) render();
+  });
+  document.getElementById('control-bar')?.addEventListener(
+    'scroll',
+    () => {
+      if (floatOpen) render();
+    },
+    { passive: true }
+  );
+
+  loadHistory();
+
+  return {
+    async commit(value) {
+      await window.api.addInputHistory(historyKey, value);
+      await loadHistory();
+    },
+    // floating-dropdown側からの行選択/削除イベント処理（main.js側のIPC中継経由で届く）。
+    async handleEvent(evt) {
+      if (evt.type === 'select') {
+        inputEl.value = evt.value;
+        closeDropdown();
+        inputEl.focus();
+      } else if (evt.type === 'remove') {
+        await window.api.removeInputHistory(historyKey, evt.value);
+        await loadHistory();
+        if (floatOpen) render();
+      }
+    },
+  };
+}
+
+const channelInputHistory = setupChannelNameHistoryDropdown(channelInput, 'channelName');
+window.api.floatingDropdown.onEvent((evt) => {
+  if (evt.id !== CHANNEL_HISTORY_FLOATING_ID) return;
+  channelInputHistory.handleEvent(evt);
+});
 
 addChannelBtn.addEventListener('click', async () => {
   const name = channelInput.value.trim();
@@ -310,92 +680,110 @@ channelInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addChannelBtn.click();
 });
 
-dropsToggleBtn.addEventListener('click', async () => {
+// 依頼#15: ヘッダーの単一Dropsハブボタン。Twitch/Kick Dropsページ表示中はワンクリックで
+// 閉じられる旧仕様（drops-toggle-btn/kick-drops-toggle-btnが常時ヘッダーにあった挙動）を
+// 保つため、表示中はハブパネルより優先してそちらを閉じる。
+dropsHubBtn.addEventListener('click', async () => {
   if (dropsOpen) {
     await window.api.closeDrops();
     dropsOpen = false;
-    dropsToggleBtn.textContent = 'Twitch Drops';
-    dropsProgressBtn.disabled = true;
-    dropsProgressResult.textContent = '';
+    updateDropsHubBtnLabel();
+    return;
+  }
+  if (kickDropsOpen) {
+    await window.api.closeKickDrops();
+    kickDropsOpen = false;
+    updateDropsHubBtnLabel();
+    return;
+  }
+  if (!dropsHubModal.classList.contains('hidden')) {
+    dropsHubCloseBtn.click();
+    return;
+  }
+  await window.api.openSidePanel('drops-hub', 340);
+  dropsHubModal.classList.remove('hidden');
+  refreshDropsAutoList();
+});
+
+dropsHubCloseBtn.addEventListener('click', async () => {
+  dropsHubModal.classList.add('hidden');
+  await window.api.closeSidePanel('drops-hub');
+});
+
+dropsHubTwitchToggleBtn.addEventListener('click', async () => {
+  if (dropsOpen) {
+    await window.api.closeDrops();
+    dropsOpen = false;
+    dropsHubProgressResult.textContent = '';
   } else {
     await window.api.openDrops();
     dropsOpen = true;
-    dropsToggleBtn.textContent = 'Twitch Drops を閉じる';
-    dropsProgressBtn.disabled = false;
   }
+  updateDropsHubBtnLabel();
+});
+
+// 「確認操作をした時だけ」DOM読み取りを実行する（常時監視はしない設計）
+dropsHubProgressBtn.addEventListener('click', async () => {
+  dropsHubProgressResult.textContent = '読み取り中...';
+  const result = await window.api.readDropsProgress();
+  if (result.error) {
+    dropsHubProgressResult.textContent = `取得失敗（非公式機能のため仕様変更の影響の可能性）: ${result.error}`;
+    return;
+  }
+  if (!result.count) {
+    dropsHubProgressResult.textContent = '進捗バーが見つかりませんでした。Dropsページの表示状態をご確認ください。';
+    return;
+  }
+  const first = result.items[0];
+  dropsHubProgressResult.textContent = `進捗: ${first.valueNow ?? '?'} / ${first.valueMax ?? '?'}（${result.count}件検出）`;
 });
 
 // KickのDrops&報酬（インベントリ）ページ。Twitch版と同様、実ページをそのまま表示するのみで
 // 進捗の自動読み取りには対応しない（KickとTwitchでDOM構造が異なるため）。
-kickDropsToggleBtn.addEventListener('click', async () => {
+dropsHubKickToggleBtn.addEventListener('click', async () => {
   if (kickDropsOpen) {
     await window.api.closeKickDrops();
     kickDropsOpen = false;
-    kickDropsToggleBtn.textContent = 'Kick Drops';
   } else {
     await window.api.openKickDrops();
     kickDropsOpen = true;
-    kickDropsToggleBtn.textContent = 'Kick Drops を閉じる';
   }
+  updateDropsHubBtnLabel();
 });
 
-// 「確認操作をした時だけ」DOM読み取りを実行する（常時監視はしない設計）
-dropsProgressBtn.addEventListener('click', async () => {
-  dropsProgressResult.textContent = '読み取り中...';
-  const result = await window.api.readDropsProgress();
-  if (result.error) {
-    dropsProgressResult.textContent = `取得失敗（非公式機能のため仕様変更の影響の可能性）: ${result.error}`;
-    return;
+function updateDropsHubBtnLabel() {
+  if (dropsOpen) {
+    dropsHubBtn.textContent = '🎁 Twitch Drops を閉じる';
+  } else if (kickDropsOpen) {
+    dropsHubBtn.textContent = '🎁 Kick Drops を閉じる';
+  } else {
+    dropsHubBtn.textContent = '🎁 Drops';
   }
-  if (!result.count) {
-    dropsProgressResult.textContent = '進捗バーが見つかりませんでした。Dropsページの表示状態をご確認ください。';
-    return;
-  }
-  const first = result.items[0];
-  dropsProgressResult.textContent = `進捗: ${first.valueNow ?? '?'} / ${first.valueMax ?? '?'}（${result.count}件検出）`;
-});
+  dropsHubTwitchToggleBtn.textContent = dropsOpen ? 'Twitch Dropsを閉じる（またはヘッダーの🎁から）' : 'Twitch Dropsを開く';
+  dropsHubKickToggleBtn.textContent = kickDropsOpen ? 'Kick Dropsを閉じる（またはヘッダーの🎁から）' : 'Kick Dropsを開く';
+  dropsHubProgressBtn.disabled = !dropsOpen;
+}
+updateDropsHubBtnLabel();
 
-// 自作メニューバーの「ヘルプ > 使い方 / 注記」からも同じ処理を呼べるよう、名前付き関数にしてある。
+// 2026-08-07: 配信を消さないオーバーレイ方式（openOverlayPanel）へ移植済み。中身（タブ切替・
+// 初回案内からの導線・setFirstLaunchDone呼び出し等）はoverlay-panel/overlay-panel.jsへ
+// そのまま移した（見た目・挙動は変えていない）。onOpenHelp/onOpenWelcome（main.js側からの
+// トリガーIPC。現状どこからも発火されていない旧経路）はそのまま残してよいため未変更。
 async function openHelpModal() {
-  await window.api.hideContentViews();
-  helpModal.classList.remove('hidden');
+  await window.api.openOverlayPanel('help');
 }
 window.api.onOpenHelp(openHelpModal);
-helpCloseBtn.addEventListener('click', async () => {
-  helpModal.classList.add('hidden');
-  await window.api.showContentViews();
-});
-helpTabBtns.forEach((btn) => {
-  btn.addEventListener('click', () => {
-    const tab = btn.dataset.helpTab;
-    helpTabBtns.forEach((b) => b.classList.toggle('active', b === btn));
-    helpTabContents.forEach((c) => c.classList.toggle('hidden', c.dataset.helpContent !== tab));
-  });
-});
 
-// 自作メニューバーの「ヘルプ > 初回案内」からも同じ処理を呼べるよう、名前付き関数にしてある。
 async function openWelcomeModal() {
-  await window.api.hideContentViews();
-  welcomeModal.classList.remove('hidden');
+  await window.api.openOverlayPanel('welcome');
 }
 window.api.onOpenWelcome(openWelcomeModal);
-welcomeCloseBtn.addEventListener('click', async () => {
-  welcomeModal.classList.add('hidden');
-  await window.api.showContentViews();
-  await window.api.setFirstLaunchDone();
-});
-welcomeOpenHelpBtn.addEventListener('click', async () => {
-  welcomeModal.classList.add('hidden');
-  helpModal.classList.remove('hidden');
-  await window.api.setFirstLaunchDone();
-});
 
 // 初回起動時のみ自動で案内ポップアップを表示
 (async () => {
   const done = await window.api.getFirstLaunchDone();
   if (!done) {
-    await window.api.hideContentViews();
-    welcomeModal.classList.remove('hidden');
+    await window.api.openOverlayPanel('welcome');
   }
 })();
 
@@ -494,47 +882,12 @@ proAuthCloseBtn.addEventListener('click', async () => {
 });
 
 // ---- フィードバック（件名・本文のみ。宛先はmumeinoapp@gmail.com固定。main.js参照） ----
-const feedbackModal = document.getElementById('feedback-modal');
-const feedbackCloseBtn = document.getElementById('feedback-close-btn');
-const feedbackSendBtn = document.getElementById('feedback-send-btn');
-const feedbackSubjectInput = document.getElementById('feedback-subject-input');
-const feedbackBodyInput = document.getElementById('feedback-body-input');
-const feedbackMessage = document.getElementById('feedback-message');
-
+// 2026-08-07: 配信を消さないオーバーレイ方式（openOverlayPanel）へ移植済み。中身
+// （送信処理・エラー表示等）はoverlay-panel/overlay-panel.jsへそのまま移した
+// （見た目・挙動は変えていない）。
 async function openFeedbackModal() {
-  await window.api.hideContentViews();
-  feedbackMessage.textContent = '';
-  feedbackModal.classList.remove('hidden');
+  await window.api.openOverlayPanel('feedback');
 }
-feedbackCloseBtn.addEventListener('click', async () => {
-  feedbackModal.classList.add('hidden');
-  await window.api.showContentViews();
-});
-function setFeedbackMessage(text, isError = false) {
-  feedbackMessage.textContent = text || '';
-  feedbackMessage.style.color = isError ? '#f04747' : '';
-}
-
-feedbackSendBtn.addEventListener('click', async () => {
-  const subject = feedbackSubjectInput.value.trim();
-  const body = feedbackBodyInput.value.trim();
-  if (!subject && !body) {
-    setFeedbackMessage('件名か本文のどちらかを入力してください。', true);
-    return;
-  }
-  try {
-    feedbackSendBtn.disabled = true;
-    setFeedbackMessage('送信中…');
-    await window.api.appMenu.sendFeedback(subject, body);
-    setFeedbackMessage('送信しました。ありがとうございます！');
-    feedbackSubjectInput.value = '';
-    feedbackBodyInput.value = '';
-  } catch (err) {
-    setFeedbackMessage(`送信に失敗しました（${err.message || err}）。しばらくしてからもう一度お試しください。`, true);
-  } finally {
-    feedbackSendBtn.disabled = false;
-  }
-});
 
 function setProAuthMessage(text, isError = false) {
   proAuthMessage.textContent = text || '';
@@ -819,9 +1172,7 @@ const unifiedFeedBtnForLock = document.getElementById('unified-feed-btn');
 
 const HEADER_BUTTONS_TO_LOCK = [
   addChannelBtn,
-  dropsToggleBtn,
-  dropsProgressBtn,
-  kickDropsToggleBtn,
+  dropsHubBtn,
   emotesBtn,
   settingsOpenBtn,
   zappingBtn,
@@ -845,15 +1196,18 @@ async function openAccountLogin(platform) {
     settingsModal,
     zappingModal,
     emotesPanel,
-    volumeMixerPanel,
     chatIntegrationPanel,
     document.getElementById('layout-share-panel'),
     document.getElementById('unified-feed-modal'),
+    document.getElementById('drops-hub-modal'),
   ].forEach((el) => el.classList.add('hidden'));
+  // 上でunified-feed-modalを直接hidden化する迂回経路のため、閉じるボタンを経由せず
+  // 自動更新タイマーが残存してしまわないよう、ここでも明示的に停止する
+  stopUnifiedFeedAutoTimer();
   await window.api.hideChatIntegrationTab();
   disconnectIrc();
   await window.api.closeAllSidePanels();
-  await window.api.closeVolumeDropdown();
+  closeVolumeMixerDropdown();
   accountLoginCloseBtn.classList.remove('hidden');
   accountLoginCloseBtn.dataset.platform = platform;
   setHeaderLockedForLogin(true);
@@ -937,6 +1291,9 @@ function renderDropsAutoList() {
       <span class="remove" data-name="${gameName}">×</span>
     `;
     row.querySelector('.remove').addEventListener('click', async () => {
+      // 依頼#15でDrops自動追加/削除をPro限定の配信チェックパネルから無料の
+      // Dropsハブパネルへ移設したため、追加/削除の操作自体は引き続きPro限定として明示的にガードする。
+      if (!premiumUnlocked) { showPremiumLockedModal(); return; }
       dropsAutoConfig = dropsAutoConfig.filter((c) => c.gameName !== gameName);
       await window.api.setDropsAutoConfig(dropsAutoConfig);
       renderDropsAutoList();
@@ -946,6 +1303,7 @@ function renderDropsAutoList() {
 }
 
 dropsAutoAddBtn.addEventListener('click', async () => {
+  if (!premiumUnlocked) { showPremiumLockedModal(); return; }
   const gameName = dropsAutoGameInput.value.trim();
   const maxTiles = Number(dropsAutoMaxInput.value) || 0;
   if (!gameName || maxTiles <= 0) {
@@ -1011,6 +1369,7 @@ autoTuneInConnectBtn.addEventListener('click', async () => {
   // OAuth連携画面はウィンドウ全幅で表示するため、開いているサイドパネル（フィード含む）は一旦閉じる
   await window.api.closeAllSidePanels();
   unifiedFeedModal.classList.add('hidden');
+  stopUnifiedFeedAutoTimer(); // OAuth連携中はフィードパネルを隠すため、自動更新タイマーも一旦停止する
   twitchAuthCloseBtn.classList.remove('hidden');
   setHeaderLockedForLogin(true);
   autoTuneInMessageEl.textContent = '連携処理中... 開いた画面でTwitchにログイン・認可してください。';
@@ -1021,6 +1380,7 @@ autoTuneInConnectBtn.addEventListener('click', async () => {
   setHeaderLockedForLogin(false);
   await window.api.openSidePanel('unified-feed', 340);
   unifiedFeedModal.classList.remove('hidden');
+  startUnifiedFeedAutoTimer(); // 連携完了後にフィードパネルを再表示するタイミングで自動更新を再開する
 
   if (result.ok) {
     autoTuneInMessageEl.textContent = `連携しました（${result.login}としてログイン中）`;
@@ -1480,17 +1840,54 @@ autoTuneInLoadAllBtn.addEventListener('click', async () => {
   }
 });
 
-async function refreshUnifiedFeed() {
+// パネルを開いている間、Twitch/YouTube分だけを短い間隔で自動更新する（「チャンネルの一覧更新を
+// もっと早く更新できるようにする」要望への対応）。Kick分はBrowserViewフルロードを伴い重いため
+// 自動更新の対象からは外し、パネルを開いた直後の初回取得・手動更新ボタン押下時のみ取得する。
+// includeKick=falseで取得した際は、直前まで表示していたKick分の結果をそのまま引き継ぐ
+// （自動更新のたびにKickの行が消えたり復活したりするチラつきを防ぐため）。
+const UNIFIED_FEED_AUTO_REFRESH_MS = 20 * 1000;
+let unifiedFeedAutoTimer = null;
+
+/**
+ * フィードパネルを開いた際に自動更新タイマーを起動する。既存タイマーがあれば必ず一度停止してから
+ * 張り直す（多重登録防止）。パネルが実際に閉じている状態で誤って呼ばれても実害は無いが、
+ * 呼び出し側は基本的に「パネルを開く/再表示する」タイミングでのみ呼ぶこと。
+ */
+function startUnifiedFeedAutoTimer() {
+  stopUnifiedFeedAutoTimer();
+  unifiedFeedAutoTimer = setInterval(() => refreshUnifiedFeed({ includeKick: false }), UNIFIED_FEED_AUTO_REFRESH_MS);
+}
+
+/**
+ * フィードパネルを閉じる（隠す）すべての経路で必ず呼ぶこと。関数化しているのは、フィードパネルには
+ * 専用の閉じるボタン以外にも「別の全幅画面（アカウントログイン・Twitch OAuth連携）を開くために
+ * 一旦hiddenクラスを直接付与する」という迂回経路が複数あり、各所で個別にclearIntervalを書くと
+ * 呼び忘れが起きやすいため。
+ */
+function stopUnifiedFeedAutoTimer() {
+  if (unifiedFeedAutoTimer) {
+    clearInterval(unifiedFeedAutoTimer);
+    unifiedFeedAutoTimer = null;
+  }
+}
+
+async function refreshUnifiedFeed(options = {}) {
+  const includeKick = options.includeKick !== false;
   unifiedFeedStatus.textContent = '取得中...';
   unifiedFeedRefreshBtn.disabled = true;
   try {
-    const { items, errors } = await window.api.fetchUnifiedFeed();
-    unifiedFeedItems = items;
+    const { items, errors } = await window.api.fetchUnifiedFeed({ includeKick });
+    if (includeKick) {
+      unifiedFeedItems = items;
+    } else {
+      const previousKickItems = unifiedFeedItems.filter((item) => item.platform === 'kick');
+      unifiedFeedItems = items.concat(previousKickItems);
+    }
     renderUnifiedFeedList();
     const errMessages = [];
     if (errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
     if (errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
-    if (errors.kick) errMessages.push(`Kick: ${errors.kick}`);
+    if (includeKick && errors.kick) errMessages.push(`Kick: ${errors.kick}`);
     unifiedFeedStatus.textContent = errMessages.join(' / ');
     unifiedFeedUpdatedAt.textContent = `最終更新: ${new Date().toLocaleTimeString('ja-JP')}`;
   } catch (err) {
@@ -1510,19 +1907,31 @@ unifiedFeedBtn.addEventListener('click', async () => {
   unifiedFeedModal.classList.remove('hidden');
   refreshUnifiedFeed();
   refreshAutoTuneInStatus();
+  startUnifiedFeedAutoTimer();
 });
 
 unifiedFeedCloseBtn.addEventListener('click', async () => {
   unifiedFeedModal.classList.add('hidden');
   await window.api.closeSidePanel('unified-feed');
+  stopUnifiedFeedAutoTimer();
 });
 
 unifiedFeedRefreshBtn.addEventListener('click', () => refreshUnifiedFeed());
 
+/**
+ * @param {string} filter 'all'|'twitch'|'youtube'|'kick'
+ * @param {boolean} [persist=true] falseを渡すと保存済み設定の復元時などstore書き込みを省略する
+ */
+function setUnifiedFeedPlatformFilter(filter, persist = true) {
+  unifiedFeedPlatformFilter = filter;
+  unifiedFeedFilterBtns.forEach((b) => b.classList.toggle('active', b.dataset.platform === filter));
+  // #8対応: 再起動後も選択中の絞り込みを維持できるよう永続化する。
+  if (persist) window.api.setAllSettings({ unifiedFeedPlatformFilter: filter });
+}
+
 unifiedFeedFilterBtns.forEach((btn) => {
   btn.addEventListener('click', () => {
-    unifiedFeedPlatformFilter = btn.dataset.platform;
-    unifiedFeedFilterBtns.forEach((b) => b.classList.toggle('active', b === btn));
+    setUnifiedFeedPlatformFilter(btn.dataset.platform);
     renderUnifiedFeedList();
   });
 });
@@ -1531,89 +1940,112 @@ unifiedFeedFilterBtns.forEach((btn) => {
 // チップ内にスライダーを直接置くと、Twitchネイティブの音量スライダーで実機発生したのと同様に
 // チップのドラッグ&ドロップ並び替えと干渉する上、チップ列が窮屈になるため、
 // ヘッダーの「🔊 音量」ボタンから開く専用パネル（Windowsの音量ミキサー風）に分離した。
+//
+// 2026-08-07セッションで、旧rectOverlayHiding方式（ドロップダウンと重なる配信タイルを
+// 一時的にremoveBrowserViewして退避させる方式）から、チャンネル名履歴・app-menuと同じ
+// floating-dropdown基盤（専用BrowserViewをsetTopBrowserViewで最前面表示、配信タイルは
+// 一切removeBrowserViewしない）へ移植した。状態管理（チャンネル一覧・音量値の取得、
+// ミュート解除時に戻す直前音量の記憶）は引き続きこちら側（メインウィンドウのレンダラー）で
+// 行い、floating-dropdown側には描画用の行データだけをfloatingDropdown.setContentで渡す。
+const VOLUME_MIXER_FLOATING_ID = 'volume-mixer';
 
-const volumeMixerPanel = document.getElementById('volume-mixer-panel');
-const volumeMixerList = document.getElementById('volume-mixer-list');
+function setupVolumeMixerDropdown(btn) {
+  let floatOpen = false;
+  // ミュート解除時に直前の音量へ戻すため、クライアント側でチャンネル名ごとに覚えておく
+  const lastNonZeroVolumeByChannel = {};
 
-// ミュート解除時に直前の音量へ戻すため、クライアント側でチャンネル名ごとに覚えておく
-const lastNonZeroVolumeByChannel = {};
-
-async function renderVolumeMixer() {
-  const [channels, volumeMap] = await Promise.all([window.api.listChannels(), window.api.getChannelVolumes()]);
-  volumeMixerList.innerHTML = '';
-  if (!channels.length) {
-    volumeMixerList.innerHTML = '<div class="note" style="padding:6px;">配信がありません</div>';
-    return;
+  function closeDropdown() {
+    if (floatOpen) {
+      floatOpen = false;
+      window.api.floatingDropdown.close(VOLUME_MIXER_FLOATING_ID);
+    }
   }
-  channels.forEach((name) => {
-    const volume = name in volumeMap ? volumeMap[name] : 100;
-    if (volume > 0) lastNonZeroVolumeByChannel[name] = volume;
-    const row = document.createElement('div');
-    row.className = 'volume-row';
-    row.title = name;
-    row.innerHTML = `
-      <span class="volume-icon" data-name="${name}" title="クリックでミュート切替">${volume === 0 ? '🔇' : '🔊'}</span>
-      <span class="volume-row-name">${name}</span>
-      <input type="range" min="0" max="100" value="${volume}" data-name="${name}" />
-    `;
-    volumeMixerList.appendChild(row);
-  });
+  closeVolumeMixerDropdown = closeDropdown;
 
-  volumeMixerList.querySelectorAll('.volume-icon').forEach((el) => {
-    el.addEventListener('click', async (e) => {
-      const name = e.currentTarget.dataset.name;
-      const row = e.currentTarget.closest('.volume-row');
-      const slider = row.querySelector('input[type="range"]');
-      const current = Number(slider.value);
-      const next = current > 0 ? 0 : lastNonZeroVolumeByChannel[name] || 100;
-      await window.api.setChannelVolume(name, next);
-      renderVolumeMixer();
-    });
-  });
-  volumeMixerList.querySelectorAll('input[type="range"]').forEach((el) => {
-    el.addEventListener('input', async (e) => {
-      const name = e.target.dataset.name;
-      const value = Number(e.target.value);
-      if (value > 0) lastNonZeroVolumeByChannel[name] = value;
-      const row = e.target.closest('.volume-row');
-      row.querySelector('.volume-icon').textContent = value === 0 ? '🔇' : '🔊';
-      await window.api.setChannelVolume(name, value);
-    });
-  });
-}
-
-// 音量ミキサーは常設のサイドパネルではなく、必要な時だけ出す最前面ドロップダウンにしているため、
-// 他パネルのようなタイル領域縮小（openSidePanel）は使わず、専用IPCで開閉する。
-async function openVolumeMixer() {
-  await window.api.openVolumeDropdown();
-  volumeMixerPanel.classList.remove('hidden');
-  renderVolumeMixer();
-}
-
-async function closeVolumeMixer() {
-  volumeMixerPanel.classList.add('hidden');
-  await window.api.closeVolumeDropdown();
-}
-
-// ドロップダウン形式：ボタンを押すたびに開閉をトグルする（専用の閉じるボタンは持たない）
-volumeMixerBtn.addEventListener('click', async () => {
-  if (volumeMixerPanel.classList.contains('hidden')) {
-    await openVolumeMixer();
-  } else {
-    await closeVolumeMixer();
+  // ボタン直下・右端揃えで表示する矩形をビューポート基準（BrowserViewのbounds座標系と同じ）で
+  // 計算する。幅は旧CSSのwidth:190pxを踏襲、高さは行数に応じて可変（旧max-height:260pxを踏襲）。
+  function computeRect(rowCount) {
+    const rect = btn.getBoundingClientRect();
+    const ROW_HEIGHT = 30; // floating-dropdown.css .volume-row のpadding込み実測相当
+    const width = 190;
+    const height = Math.min(260, Math.max(ROW_HEIGHT, rowCount * ROW_HEIGHT));
+    return {
+      x: Math.max(0, rect.right - width),
+      y: rect.bottom + 2,
+      width,
+      height,
+    };
   }
+
+  async function render() {
+    const [channels, volumeMap] = await Promise.all([window.api.listChannels(), window.api.getChannelVolumes()]);
+    const rows = channels.map((name) => {
+      const volume = name in volumeMap ? volumeMap[name] : 100;
+      if (volume > 0) lastNonZeroVolumeByChannel[name] = volume;
+      return { name, volume, muted: volume === 0 };
+    });
+    const rect = computeRect(rows.length || 1);
+    if (!floatOpen) {
+      floatOpen = true;
+      window.api.floatingDropdown.open(VOLUME_MIXER_FLOATING_ID, rect);
+    } else {
+      window.api.floatingDropdown.setRect(VOLUME_MIXER_FLOATING_ID, rect);
+    }
+    window.api.floatingDropdown.setContent(VOLUME_MIXER_FLOATING_ID, { rows, empty: !channels.length });
+  }
+
+  // ドロップダウン形式：ボタンを押すたびに開閉をトグルする（専用の閉じるボタンは持たない）
+  btn.addEventListener('click', async () => {
+    if (!floatOpen) {
+      await render();
+    } else {
+      closeDropdown();
+    }
+  });
+
+  // ドロップダウンの外側をクリックしたら閉じる（一般的なドロップダウンの挙動に合わせる）。
+  // floating-dropdown側は別BrowserViewのためこのdocumentのclickイベントは届かず、
+  // 実質「ボタン以外の場所をクリックした」場合にのみここが呼ばれる。
+  document.addEventListener('click', (e) => {
+    if (!floatOpen) return;
+    if (btn.contains(e.target)) return;
+    closeDropdown();
+  });
+
+  return {
+    isOpen: () => floatOpen,
+    // チャンネル構成が変わった時（ザッピングの自動切替等）、開いていれば一覧を更新する
+    refreshIfOpen: () => {
+      if (floatOpen) render();
+    },
+    // floating-dropdown側からのミュート切替/音量変更イベント処理（main.js側のIPC中継経由で届く）。
+    async handleEvent(evt) {
+      if (evt.type === 'toggle-mute') {
+        const name = evt.value;
+        const current = (await window.api.getChannelVolumes())[name] ?? 100;
+        const next = current > 0 ? 0 : lastNonZeroVolumeByChannel[name] || 100;
+        await window.api.setChannelVolume(name, next);
+        render();
+      } else if (evt.type === 'set-volume') {
+        const { name, value } = evt.value;
+        if (value > 0) lastNonZeroVolumeByChannel[name] = value;
+        await window.api.setChannelVolume(name, value);
+        // ドラッグ中に高頻度で発火するイベントのため、ここではrender()（=setContentの
+        // 再送）を呼ばない。呼ぶとfloating-dropdown側でDOMのスライダー値がサーバ側の値で
+        // 上書きされ、ドラッグ中のつまみがカクつく/戻る現象が起きるため。
+      }
+    },
+  };
+}
+
+const volumeMixer = setupVolumeMixerDropdown(volumeMixerBtn);
+window.api.floatingDropdown.onEvent((evt) => {
+  if (evt.id !== VOLUME_MIXER_FLOATING_ID) return;
+  volumeMixer.handleEvent(evt);
 });
 
-// ドロップダウンの外側をクリックしたら閉じる（一般的なドロップダウンの挙動に合わせる）
-document.addEventListener('click', (e) => {
-  if (volumeMixerPanel.classList.contains('hidden')) return;
-  if (volumeMixerPanel.contains(e.target) || volumeMixerBtn.contains(e.target)) return;
-  closeVolumeMixer();
-});
-
-// チャンネル構成が変わった時（ザッピングの自動切替等）、パネルを開いていれば一覧を更新する
 function refreshVolumeMixerIfOpen() {
-  if (!volumeMixerPanel.classList.contains('hidden')) renderVolumeMixer();
+  volumeMixer.refreshIfOpen();
 }
 
 // ---- チャット統合パネル（タブ切替 / 時系列統合） ----
@@ -1630,22 +2062,68 @@ const chatIntegrationCloseBtn = document.getElementById('chat-integration-close-
 const chatIntegrationModeTabBtn = document.getElementById('chat-integration-mode-tab-btn');
 const chatIntegrationModeTimelineBtn = document.getElementById('chat-integration-mode-timeline-btn');
 const chatIntegrationTabs = document.getElementById('chat-integration-tabs');
+const chatIntegrationTimelineWrap = document.getElementById('chat-integration-timeline-wrap');
 const chatIntegrationTimeline = document.getElementById('chat-integration-timeline');
+const chatIntegrationJumpBottomBtn = document.getElementById('chat-integration-jump-bottom-btn');
 const chatIntegrationSendRow = document.getElementById('chat-integration-send-row');
 const chatIntegrationSendInput = document.getElementById('chat-integration-send-input');
 const chatIntegrationSendBtn = document.getElementById('chat-integration-send-btn');
 
 let chatIntegrationMode = 'tab'; // 'tab' | 'timeline'
 let chatIntegrationSelectedChannel = null;
+// #7対応: { [channelName]: true } チャット統合パネル（主に全タブ統合＝timelineモード）の表示対象から
+// 除外中のチャンネル。renderChatIntegrationTabs()のたびにmain process側の永続化値で更新する。
+let chatIntegrationHiddenMap = {};
 
-function setChatIntegrationMode(mode) {
+/**
+ * @param {string} mode 'tab' | 'timeline'
+ * @param {boolean} [persist=true] falseを渡すと保存済み設定の復元時などstore書き込みを省略する
+ *   （起動直後の復元処理で、読み込んだ直後の値をそのまま書き戻す無駄なIPCを避けるため）
+ */
+function setChatIntegrationMode(mode, persist = true) {
   chatIntegrationMode = mode;
   chatIntegrationModeTabBtn.classList.toggle('active', mode === 'tab');
   chatIntegrationModeTimelineBtn.classList.toggle('active', mode === 'timeline');
   chatIntegrationTabs.classList.toggle('timeline-mode', mode === 'timeline');
-  chatIntegrationTimeline.classList.toggle('hidden', mode !== 'timeline');
+  chatIntegrationTimelineWrap.classList.toggle('hidden', mode !== 'timeline');
   chatIntegrationSendRow.classList.toggle('hidden', mode !== 'timeline');
+  // タブモードから戻ってきた際、実際のスクロール位置と無関係にボタンが表示されたまま
+  // 残ることがあるため、timelineモードに入るたびに現在位置で判定し直す。
+  if (mode === 'timeline') {
+    chatIntegrationJumpBottomBtn.classList.toggle('hidden', isChatTimelineNearBottom());
+  }
+  // #8対応: 再起動後も選択中のモードを維持できるよう永続化する。
+  if (persist) window.api.setAllSettings({ chatIntegrationMode: mode });
 }
+
+/**
+ * タイムラインが最下部（＝最新のチャット表示位置）付近にあるかどうかを判定するための閾値(px)。
+ * この範囲内であれば「最下部にいる」とみなし、範囲外なら少しでも上にスクロールしている
+ * とみなして「↓ 最新へ」ボタンを表示する。
+ */
+const CHAT_TIMELINE_BOTTOM_THRESHOLD = 16;
+
+function isChatTimelineNearBottom() {
+  return (
+    chatIntegrationTimeline.scrollHeight -
+      chatIntegrationTimeline.scrollTop -
+      chatIntegrationTimeline.clientHeight <
+    CHAT_TIMELINE_BOTTOM_THRESHOLD
+  );
+}
+
+/** タイムラインを最下部（最新のチャット表示位置）まで即座にスクロールし、ジャンプボタンを隠す */
+function scrollChatTimelineToBottom() {
+  chatIntegrationTimeline.scrollTop = chatIntegrationTimeline.scrollHeight;
+  chatIntegrationJumpBottomBtn.classList.add('hidden');
+}
+
+// スクロール位置が一番下ではなく少しでも上になっている場合は「↓ 最新へ」ボタンを表示し、
+// クリックひとつで最新のチャット表示位置（一番下）まで戻れるようにする。
+chatIntegrationTimeline.addEventListener('scroll', () => {
+  chatIntegrationJumpBottomBtn.classList.toggle('hidden', isChatTimelineNearBottom());
+});
+chatIntegrationJumpBottomBtn.addEventListener('click', scrollChatTimelineToBottom);
 
 /** 時系列統合モードの送信欄から、上のタブで選択中のチャンネルへメッセージを送る */
 async function sendTimelineChatMessage() {
@@ -1671,15 +2149,40 @@ chatIntegrationSendInput.addEventListener('keydown', (e) => {
 });
 
 async function renderChatIntegrationTabs() {
-  const channels = await window.api.listChannels();
+  const [channels, hiddenMap] = await Promise.all([
+    window.api.listChannels(),
+    window.api.getChatIntegrationHiddenMap(),
+  ]);
+  chatIntegrationHiddenMap = hiddenMap || {};
   chatIntegrationTabs.innerHTML = '';
   channels.forEach((name) => {
+    const hidden = !!chatIntegrationHiddenMap[name];
     const tab = document.createElement('div');
     tab.className = 'chat-tab' + (name === chatIntegrationSelectedChannel ? ' active' : '');
-    tab.textContent = name;
     tab.dataset.name = name;
+    tab.innerHTML = `
+      <span class="chat-tab-name">${escapeHtml(name)}</span>
+      <span class="chat-tab-toggle${hidden ? ' active' : ''}" data-name="${escapeHtml(name)}" title="全タブ統合（時系列）での、このチャンネルの発言表示を切り替え">${hidden ? '🔇' : '💬'}</span>
+    `;
     tab.addEventListener('click', () => selectChatIntegrationTab(name));
     chatIntegrationTabs.appendChild(tab);
+  });
+  // #7対応: タブ名の横のトグルだけはタブ選択（selectChatIntegrationTab）を発火させたくないため、
+  // クリックイベントの伝播をここで止めてから個別に処理する。
+  chatIntegrationTabs.querySelectorAll('.chat-tab-toggle').forEach((el) => {
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = el.dataset.name;
+      const nowHidden = !el.classList.contains('active');
+      await window.api.setChatIntegrationHidden(name, nowHidden);
+      if (nowHidden) {
+        chatIntegrationHiddenMap[name] = true;
+      } else {
+        delete chatIntegrationHiddenMap[name];
+      }
+      el.classList.toggle('active', nowHidden);
+      el.textContent = nowHidden ? '🔇' : '💬';
+    });
   });
 
   if (chatIntegrationMode === 'tab') {
@@ -1774,6 +2277,7 @@ let ircReconnectTimer = null;
 function connectIrc() {
   if (ircSocket) return;
   chatIntegrationTimeline.innerHTML = '';
+  chatIntegrationJumpBottomBtn.classList.add('hidden');
   ircJoinedChannels.clear();
   const nick = 'justinfan' + Math.floor(10000 + Math.random() * 89999);
   try {
@@ -1887,7 +2391,7 @@ function parseIrcPrivmsg(line) {
   const username = tags['display-name'] || prefix.split('!')[0] || '?';
   const color = tags['color'] || '';
   const emotesTag = tags['emotes'] || '';
-  return { channel, username, message, color, emotesTag };
+  return { channel, username, message, color, emotesTag, platform: 'twitch' };
 }
 
 function escapeHtml(str) {
@@ -1918,26 +2422,83 @@ function isUtf8CharBoundary(bytes, index) {
  * 範囲の開始・終了が文字境界と一致しないものは安全側に倒して個別にスキップする
  * （メッセージ全体はフォールバックさせず、そのスタンプ1個だけテキスト表示に留める）。
  */
+/**
+ * チャット本文中のTwitchクリップURL（clips.twitch.tv/xxx、または twitch.tv/チャンネル名/clip/xxx）
+ * を検出する。以前はURLがそのまま文字列で表示されるだけだったが、Twitch本家同様にサムネ付きの
+ * カード表示にしてクリックで開けるようにするための下準備。
+ * マッチ位置（index）はJS文字列のUTF-16コードユニット単位。呼び出し側でTwitch用のUTF-8バイト
+ * オフセットに変換するか、Kick/その他用にそのまま文字インデックスとして使うかを選ぶ。
+ */
+const CLIP_URL_PATTERN =
+  /https?:\/\/(?:clips\.twitch\.tv\/([A-Za-z0-9_-]+)|(?:www\.|m\.)?twitch\.tv\/[A-Za-z0-9_]+\/clip\/([A-Za-z0-9_-]+))(?:\?\S*)?/g;
+
+function extractClipUrlRanges(message) {
+  if (!message) return [];
+  const matches = [];
+  CLIP_URL_PATTERN.lastIndex = 0;
+  let m;
+  while ((m = CLIP_URL_PATTERN.exec(message)) !== null) {
+    const slug = m[1] || m[2];
+    if (slug) {
+      matches.push({ type: 'clip', charStart: m.index, charEnd: m.index + m[0].length, url: m[0], slug });
+    }
+  }
+  return matches;
+}
+
+/** サムネ未取得時点でも表示できる、クリップカードの初期HTML（🎬アイコン＋「クリップを見る」）を返す */
+function buildClipCardHtml(url, slug) {
+  return (
+    `<span class="chat-clip-card" data-clip-url="${escapeHtml(url)}" data-clip-slug="${escapeHtml(
+      slug
+    )}" title="${escapeHtml(url)}">` +
+    `<span class="chat-clip-thumb-wrap"><span class="chat-clip-thumb-placeholder">🎬</span></span>` +
+    `<span class="chat-clip-label">クリップを見る</span></span>`
+  );
+}
+
+/**
+ * Twitch IRCのemotesタグ（例: "25:0-4,12-16/1902:6-10"）とクリップURLを解析し、対象範囲を
+ * スタンプ画像<img>／クリップカードに置き換えたHTMLを返す。
+ * どちらの対象も無い場合は通常のエスケープ済みテキストにフォールバックする。
+ * emotesタグの範囲指定はUTF-8バイトオフセットのため、TextEncoder/Decoderでバイト単位に処理する。
+ * クリップURLはJS文字列（UTF-16）のインデックスで見つかるため、バイトオフセットに変換してから
+ * emoteの範囲と同じ配列にまとめ、位置順にソートして「生成済みHTML文字列への後付け置換」を一切
+ * 行わずに1回のパスで組み立てる（HTML構造・属性値をまたいだ誤置換を避けるため）。
+ * 絵文字・日本語等のマルチバイト文字を含むメッセージで稀に範囲がずれることがあり、
+ * その場合は文字の途中でバイト列を切ってしまい文字化け（U+FFFD）が発生するため、
+ * 範囲の開始・終了が文字境界と一致しないものは安全側に倒して個別にスキップする
+ * （メッセージ全体はフォールバックさせず、そのスタンプ1個だけテキスト表示に留める）。
+ */
 function buildEmoteAwareMessageHtml(message, emotesTag) {
-  if (!emotesTag) return escapeHtml(message);
+  if (!message) return '';
   try {
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
     const bytes = encoder.encode(message);
     const ranges = [];
-    emotesTag.split('/').forEach((entry) => {
-      const [id, positions] = entry.split(':');
-      if (!id || !positions) return;
-      positions.split(',').forEach((pos) => {
-        const [startStr, endStr] = pos.split('-');
-        const start = parseInt(startStr, 10);
-        const end = parseInt(endStr, 10);
-        if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || end >= bytes.length) return;
-        // 開始・終了(の次のバイト)が文字境界からずれている場合、Twitch側のオフセット不整合
-        // が疑われるため、この範囲は画像化せず通常テキストとして残す（文字化け防止）。
-        if (!isUtf8CharBoundary(bytes, start) || !isUtf8CharBoundary(bytes, end + 1)) return;
-        ranges.push({ id, start, end });
+    if (emotesTag) {
+      emotesTag.split('/').forEach((entry) => {
+        const [id, positions] = entry.split(':');
+        if (!id || !positions) return;
+        positions.split(',').forEach((pos) => {
+          const [startStr, endStr] = pos.split('-');
+          const start = parseInt(startStr, 10);
+          const end = parseInt(endStr, 10);
+          if (Number.isNaN(start) || Number.isNaN(end) || start > end || start < 0 || end >= bytes.length) return;
+          // 開始・終了(の次のバイト)が文字境界からずれている場合、Twitch側のオフセット不整合
+          // が疑われるため、この範囲は画像化せず通常テキストとして残す（文字化け防止）。
+          if (!isUtf8CharBoundary(bytes, start) || !isUtf8CharBoundary(bytes, end + 1)) return;
+          ranges.push({ type: 'emote', start, end, id });
+        });
       });
+    }
+    // クリップURLの文字インデックス（UTF-16）をUTF-8バイトオフセットに変換して同じ配列に統合
+    extractClipUrlRanges(message).forEach((c) => {
+      const start = encoder.encode(message.slice(0, c.charStart)).length;
+      const end = encoder.encode(message.slice(0, c.charEnd)).length - 1;
+      if (end < start || end >= bytes.length) return;
+      ranges.push({ type: 'clip', start, end, url: c.url, slug: c.slug });
     });
     if (ranges.length === 0) return escapeHtml(message);
     ranges.sort((a, b) => a.start - b.start);
@@ -1949,14 +2510,18 @@ function buildEmoteAwareMessageHtml(message, emotesTag) {
       if (r.start > cursor) {
         html += escapeHtml(decoder.decode(bytes.slice(cursor, r.start)));
       }
-      const emoteText = decoder.decode(bytes.slice(r.start, r.end + 1));
-      const src = `https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(r.id)}/default/dark/1.0`;
-      // CDN側にその解像度/テーマの画像が無い等で読み込みに失敗した場合、ブロークン
-      // イメージのアイコン＋altテキストが表示されてしまい文字化けのように見えるため、
-      // 失敗時はプレーンテキストのノードに置き換えて自然に読める状態にフォールバックする。
-      html += `<img class="chat-emote" src="${src}" alt="${escapeHtml(emoteText)}" title="${escapeHtml(
-        emoteText
-      )}" onerror="this.replaceWith(document.createTextNode(this.alt));this.onerror=null;">`;
+      if (r.type === 'clip') {
+        html += buildClipCardHtml(r.url, r.slug);
+      } else {
+        const emoteText = decoder.decode(bytes.slice(r.start, r.end + 1));
+        const src = `https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(r.id)}/default/dark/1.0`;
+        // CDN側にその解像度/テーマの画像が無い等で読み込みに失敗した場合、ブロークン
+        // イメージのアイコン＋altテキストが表示されてしまい文字化けのように見えるため、
+        // 失敗時はプレーンテキストのノードに置き換えて自然に読める状態にフォールバックする。
+        html += `<img class="chat-emote" src="${src}" alt="${escapeHtml(emoteText)}" title="${escapeHtml(
+          emoteText
+        )}" onerror="this.replaceWith(document.createTextNode(this.alt));this.onerror=null;">`;
+      }
       cursor = r.end + 1;
     });
     if (cursor < bytes.length) {
@@ -1968,33 +2533,146 @@ function buildEmoteAwareMessageHtml(message, emotesTag) {
   }
 }
 
+/**
+ * Kickのチャット本文中のインラインスタンプ記法（例: "[emote:12345:PogChamp]"）とクリップURLを
+ * 解析し、対象範囲をスタンプ画像<img>／クリップカードに置き換えたHTMLを返す。Kick側はTwitchの
+ * ようなバイトオフセットのタグではなく、本文自体にこの記法が埋め込まれてくるため、JS文字列の
+ * インデックスのままemote範囲・クリップ範囲を統合し、位置順に1回のパスで組み立てる
+ * （Twitch用と同様、生成済みHTML文字列への後付け置換は行わない）。
+ * どの記法にも一致しない部分（あるいは記法自体が無い場合）は通常のエスケープ済みテキストにする。
+ */
+function buildKickEmoteAwareMessageHtml(message) {
+  if (!message) return '';
+  try {
+    const ranges = [];
+    const emotePattern = /\[emote:(\d+):([^\]]*)\]/g;
+    let match;
+    while ((match = emotePattern.exec(message)) !== null) {
+      ranges.push({
+        type: 'emote',
+        start: match.index,
+        end: emotePattern.lastIndex - 1,
+        id: match[1],
+        name: match[2],
+      });
+    }
+    extractClipUrlRanges(message).forEach((c) => {
+      ranges.push({ type: 'clip', start: c.charStart, end: c.charEnd - 1, url: c.url, slug: c.slug });
+    });
+    if (ranges.length === 0) return escapeHtml(message);
+    ranges.sort((a, b) => a.start - b.start);
+
+    let html = '';
+    let cursor = 0;
+    ranges.forEach((r) => {
+      if (r.start < cursor) return; // 重複/不正な範囲はスキップ
+      if (r.start > cursor) {
+        html += escapeHtml(message.slice(cursor, r.start));
+      }
+      if (r.type === 'clip') {
+        html += buildClipCardHtml(r.url, r.slug);
+      } else {
+        const src = `https://files.kick.com/emotes/${encodeURIComponent(r.id)}/fullsize`;
+        const label = r.name || r.id;
+        html += `<img class="chat-emote" src="${src}" alt="${escapeHtml(label)}" title="${escapeHtml(
+          label
+        )}" onerror="this.replaceWith(document.createTextNode(this.alt));this.onerror=null;">`;
+      }
+      cursor = r.end + 1;
+    });
+    if (cursor < message.length) {
+      html += escapeHtml(message.slice(cursor));
+    }
+    return html;
+  } catch (_) {
+    return escapeHtml(message);
+  }
+}
+
+/** クリップカードのサムネ画像・タイトルを非同期取得して差し込む（未設定/取得失敗時は🎬アイコンのまま） */
+function hydrateClipCards(line) {
+  line.querySelectorAll('.chat-clip-card').forEach((card) => {
+    const slug = card.dataset.clipSlug;
+    if (!slug) return;
+    window.api
+      .fetchClipInfo(slug)
+      .then((info) => {
+        if (!info) return;
+        // 差し込むまでの間にタイムラインの行数上限（CHAT_TIMELINE_MAX_LINES）超過で
+        // このカードごと削除されている可能性があるため、DOM上にまだ存在するか確認してから触る。
+        if (!card.isConnected) return;
+        if (info.thumbnailUrl) {
+          const thumbWrap = card.querySelector('.chat-clip-thumb-wrap');
+          if (thumbWrap) {
+            // Helixのサムネ幅・高さプレースホルダー（%{width}x%{height}）を実サイズに差し替える
+            const src = info.thumbnailUrl.replace('%{width}', '160').replace('%{height}', '90');
+            thumbWrap.innerHTML = `<img class="chat-clip-thumb" src="${escapeHtml(
+              src
+            )}" alt="${escapeHtml(info.title || 'クリップ')}" onerror="this.remove();">`;
+          }
+        }
+        if (info.title) {
+          const label = card.querySelector('.chat-clip-label');
+          if (label) label.textContent = info.broadcasterName ? `${info.title}（${info.broadcasterName}）` : info.title;
+        }
+      })
+      .catch(() => {
+        /* Helix未設定・取得失敗時は🎬アイコンのままにしておく（実害なし） */
+      });
+  });
+}
+
 const CHAT_TIMELINE_MAX_LINES = 300;
 
-function appendTimelineMessage({ channel, username, message, color, emotesTag }) {
-  const nearBottom =
-    chatIntegrationTimeline.scrollHeight - chatIntegrationTimeline.scrollTop - chatIntegrationTimeline.clientHeight <
-    40;
+/**
+ * #7対応: チャット統合パネル（全タブ統合＝timelineモード）の表示対象からチャンネルが
+ * 除外されているかどうかを判定する。IRC/YouTube/Kickいずれも発言のchannel名の大文字小文字が
+ * 登録名と厳密に一致するとは限らないため、小文字化して比較する。
+ */
+function isChannelHiddenFromChatIntegration(channel) {
+  if (!channel) return false;
+  const lower = channel.toLowerCase();
+  return Object.keys(chatIntegrationHiddenMap).some((name) => name.toLowerCase() === lower);
+}
+
+function appendTimelineMessage({ channel, username, message, color, emotesTag, platform }) {
+  if (isChannelHiddenFromChatIntegration(channel)) return;
+  // 追加前の時点でのスクロール位置を見て、最下部付近にいたかどうかを判定する
+  // （最下部にいた場合のみ新着メッセージに追従し、少しでも上にスクロールして過去ログを
+  // 読んでいる場合は追従させず「↓ 最新へ」ボタン側に誘導する）。
+  const wasNearBottom = isChatTimelineNearBottom();
   const line = document.createElement('div');
   line.className = 'chat-line';
+  const messageHtml =
+    platform === 'kick' ? buildKickEmoteAwareMessageHtml(message) : buildEmoteAwareMessageHtml(message, emotesTag);
   line.innerHTML = `<span class="chat-channel">[${escapeHtml(channel)}]</span><span class="chat-user" style="color:${
     color || '#9147ff'
-  }">${escapeHtml(username)}</span>: <span class="chat-message-text">${buildEmoteAwareMessageHtml(
-    message,
-    emotesTag
-  )}</span>`;
+  }">${escapeHtml(username)}</span>: <span class="chat-message-text">${messageHtml}</span>`;
   chatIntegrationTimeline.appendChild(line);
+  hydrateClipCards(line);
   while (chatIntegrationTimeline.children.length > CHAT_TIMELINE_MAX_LINES) {
     chatIntegrationTimeline.removeChild(chatIntegrationTimeline.firstChild);
   }
-  if (nearBottom) {
+  if (wasNearBottom) {
     chatIntegrationTimeline.scrollTop = chatIntegrationTimeline.scrollHeight;
+  } else {
+    chatIntegrationJumpBottomBtn.classList.remove('hidden');
   }
 }
+
+// クリップカードのクリックで、検証済みのURLだけをOS既定ブラウザで開く（メインプロセス側の
+// clips:open-externalでもホスト名を再検証しているため、ここは主にUXのための一次判定）。
+chatIntegrationTimeline.addEventListener('click', (event) => {
+  const card = event.target.closest('.chat-clip-card');
+  if (!card) return;
+  const url = card.dataset.clipUrl;
+  if (url) window.api.openClipExternal(url);
+});
 
 // YouTube側は裏読み込み（youtubeChatScraperPreload.js）で拾ったメッセージがメインプロセス経由で届く。
 // Twitchのcolorタグに相当するものが無いため、YouTube発言と分かるよう固定色（赤系）にしている。
 window.api.onYoutubeChatMessage(({ channel, username, message }) => {
-  appendTimelineMessage({ channel, username, message, color: '#ff4d4d' });
+  appendTimelineMessage({ channel, username, message, color: '#ff4d4d', platform: 'youtube' });
 });
 
 // ---- 時系列統合モードの実体: Kickチャット（Pusher WebSocket、匿名購読） ----
@@ -2126,7 +2804,7 @@ function handleKickPusherData(raw) {
   const color = (sender.identity && sender.identity.color) || KICK_DEFAULT_CHAT_COLOR;
   const message = (data && data.content) || '';
   if (!message) return;
-  appendTimelineMessage({ channel, username, message, color });
+  appendTimelineMessage({ channel, username, message, color, platform: 'kick' });
 }
 
 // ---- タイル自由配置・自由リサイズ（ウィンドウマネージャー相当） ----
@@ -2245,6 +2923,7 @@ const SIDE_PANEL_ELEMENTS = {
   'chat-integration': chatIntegrationPanel,
   'layout-share': layoutSharePanel,
   'unified-feed': unifiedFeedModal,
+  'drops-hub': dropsHubModal,
 };
 
 window.api.onSidePanelsChanged((positions) => {
@@ -2257,11 +2936,23 @@ window.api.onSidePanelsChanged((positions) => {
   });
 });
 
+// 汎用オーバーレイパネル基盤（#16向け、2026-08-07新設）。openSidePanel系のSIDE_PANEL_ELEMENTSとは
+// 独立して、現在開いているオーバーレイパネルのIDだけをrenderer側にも同期しておく
+// （ESCキー優先順位判定用。第1段階ではまだ実際に開くボタンは無いが、次回以降ここに乗るパネルの
+// ためのESC対応を先に用意しておく）。
+let overlayPanelOpenId = null;
+window.api.onOverlayPanelChanged(({ openId }) => {
+  overlayPanelOpenId = openId;
+});
+
 function setStatusBanner(text) {
   dropsProgressResult.textContent = text;
-  // ステータスバーは高さ固定で折り返せないため、長文は末尾が省略表示になる。
+  // #status-indicatorは高さ固定で折り返せないため、長文は末尾が省略表示になる。
   // title属性にも全文を入れておき、hoverで全文を確認できるようにする。
   dropsProgressResult.title = text;
+  // 中身が空の間は#status-indicatorの幅を0に畳んでmenu-bar行の場所を取らないようにする
+  // （2026-08-07: 旧#status-barの全幅固定表示からmenu-bar行右端への統合に伴う変更）。
+  statusIndicator.classList.toggle('has-text', !!text);
 }
 
 // ---- ESCキーで各パネル/モーダルを閉じる ----
@@ -2269,6 +2960,19 @@ function setStatusBanner(text) {
 // （通常は同時に1つしか開かない設計だが、念のため順序を決めておく）。
 // 各パネル既存の「閉じる」ボタンをクリックしたのと同じ状態に揃えたいので、実際にボタンをクリックする。
 function closeTopmostPanelWithEscape() {
+  // 汎用オーバーレイパネル（#16向け）はBrowserView最前面表示のため、開いていれば最優先で閉じる。
+  if (overlayPanelOpenId) {
+    window.api.closeOverlayPanel();
+    return;
+  }
+  // チャンネル名履歴ドロップダウン（floating-dropdown）。inputEl自体にフォーカスがある間は
+  // inputEl側のkeydownリスナーで閉じるが、floating-dropdown側のBrowserViewへフォーカスが
+  // 移っている場合はforwardEscapeKey経由でこちらに届く。
+  closeChannelHistoryDropdown();
+  // 自作メニューバーの小ドロップダウン（floating-dropdown、2026-08-07追加）。同上の理由。
+  closeAppMenuDropdowns();
+  // 音量ミキサー（floating-dropdown、2026-08-07追加）。同上の理由。
+  closeVolumeMixerDropdown();
   if (!accountLoginCloseBtn.classList.contains('hidden')) {
     accountLoginCloseBtn.click();
     return;
@@ -2289,6 +2993,10 @@ function closeTopmostPanelWithEscape() {
     unifiedFeedCloseBtn.click();
     return;
   }
+  if (!dropsHubModal.classList.contains('hidden')) {
+    dropsHubCloseBtn.click();
+    return;
+  }
   if (!chatIntegrationPanel.classList.contains('hidden')) {
     chatIntegrationCloseBtn.click();
     return;
@@ -2301,24 +3009,13 @@ function closeTopmostPanelWithEscape() {
     emotesCloseBtn.click();
     return;
   }
-  if (!volumeMixerPanel.classList.contains('hidden')) {
-    closeVolumeMixer();
-    return;
-  }
-  if (!welcomeModal.classList.contains('hidden')) {
-    welcomeCloseBtn.click();
-    return;
-  }
-  if (!helpModal.classList.contains('hidden')) {
-    helpCloseBtn.click();
-    return;
-  }
+  // 音量ミキサーは2026-08-07にfloating-dropdown化済みのため、この関数の先頭にある
+  // closeVolumeMixerDropdown()呼び出しで既にカバーされている。
+  // help/welcome/premium-locked/feedbackは2026-08-07に配信を消さないオーバーレイ方式
+  // （openOverlayPanel）へ移植済みのため、この関数の先頭にあるoverlayPanelOpenIdチェックで
+  // 既にカバーされている（DOM自体をindex.htmlから削除したため、ここでの参照も削除した）。
   if (!proAuthModal.classList.contains('hidden')) {
     proAuthCloseBtn.click();
-    return;
-  }
-  if (!feedbackModal.classList.contains('hidden')) {
-    feedbackCloseBtn.click();
     return;
   }
 }
@@ -2336,6 +3033,17 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   refreshChips();
   await restoreActionButtonOrder();
   setupActionButtonsDragReorder();
+  // #8対応: 全タブ統合チャットの表示モード・統一フィードの絞り込みを、保存済みの値から復元する
+  // （persist=falseで、読み込んだ値をそのまま書き戻す無駄なIPCを避ける）。
+  // 「時系列統合」モードはPro限定機能（chatIntegrationModeTimelineBtnのクリックハンドラでのみ
+  // premiumUnlockedを判定してガードしている）。保存時はProだったが、その後Pro状態が失効した
+  // ユーザーがいた場合に、このガードを経由せず'timeline'を復元してしまわないよう、ここでも
+  // 独立してPro状態を確認する（起動時のトップレベルIIFEで更新中のpremiumUnlocked変数は
+  // このタイミングで確定している保証がないため、直接IPCで取り直す）。
+  const [s, isPremium] = await Promise.all([window.api.getAllSettings(), window.api.getPremiumUnlocked()]);
+  const restoredChatMode = s.chatIntegrationMode === 'timeline' && isPremium ? 'timeline' : 'tab';
+  setChatIntegrationMode(restoredChatMode, false);
+  setUnifiedFeedPlatformFilter(s.unifiedFeedPlatformFilter || 'all', false);
 })();
 
 // ---- 自作メニューバー（ファイル/表示/ヘルプ/バージョン） ----
@@ -2346,11 +3054,109 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   const appMenuBar = document.getElementById('app-menu-bar');
   const versionMenuItem = appMenuBar.querySelector('.menu-bar-item[data-menu="version"]');
   const versionMenuDropdown = document.getElementById('version-menu-dropdown');
+  // #6対応: 通知タブ（配信開始通知）
+  const notificationsMenuItem = appMenuBar.querySelector('.menu-bar-item[data-menu="notifications"]');
+  const notificationsMenuDropdown = document.getElementById('notifications-menu-dropdown');
 
   let latestState = null;
 
+  // 2026-08-07追加: 実機確認で「ファイル/表示/ヘルプ/バージョン/通知の小ドロップダウンが
+  // 配信タイル(BrowserView)の裏に隠れる」問題が発覚したため、floating-dropdown基盤（'app-menu'
+  // パネル）へ移植した。既存の.menu-bar-dropdown DOM自体は削除せず残してある（見た目としては
+  // 配信タイルの裏に隠れたままだが、getBoundingClientRect()によるサイズ・位置計算と
+  // 中身のデータソースとして引き続き利用する）。ユーザーに実際に見える・クリックされるのは
+  // floating-dropdown側のBrowserViewコピーの方。
+  let appMenuFloatOpen = false;
+
+  /** .menu-bar-dropdown のDOM子要素を、floating-dropdown側へ渡す行データに変換する。 */
+  function domDropdownToRows(dropdownEl) {
+    return Array.from(dropdownEl.children).map((el) => {
+      if (el.classList.contains('menu-bar-dropdown-separator')) return { type: 'separator' };
+      if (el.classList.contains('disabled')) return { type: 'disabled', label: el.textContent };
+      return { type: 'action', label: el.textContent, action: el.dataset.action, url: el.dataset.url };
+    });
+  }
+
+  /** 指定itemの.menu-bar-dropdownの現在の位置・サイズ・中身をfloating-dropdown側へ反映する。 */
+  function syncFloatingAppMenu(item) {
+    const dropdownEl = item.querySelector('.menu-bar-dropdown');
+    if (!dropdownEl) return; // フィードバック/会員登録はドロップダウンを持たない単独項目
+    const rect = dropdownEl.getBoundingClientRect();
+    const floatRect = { x: rect.left, y: rect.top, width: Math.max(rect.width, 1), height: Math.max(rect.height, 1) };
+    if (!appMenuFloatOpen) {
+      appMenuFloatOpen = true;
+      window.api.floatingDropdown.open('app-menu', floatRect);
+    } else {
+      window.api.floatingDropdown.setRect('app-menu', floatRect);
+    }
+    window.api.floatingDropdown.setContent('app-menu', {
+      rows: domDropdownToRows(dropdownEl),
+      wrap: item === notificationsMenuItem,
+    });
+  }
+
+  function closeFloatingAppMenu() {
+    if (!appMenuFloatOpen) return;
+    appMenuFloatOpen = false;
+    window.api.floatingDropdown.close('app-menu');
+  }
+
   function closeAllMenuBarDropdowns() {
     appMenuBar.querySelectorAll('.menu-bar-item.open').forEach((el) => el.classList.remove('open'));
+    closeFloatingAppMenu();
+  }
+  // closeTopmostPanelWithEscape（forwardEscapeKey経由。floating-dropdown側のBrowserViewへ
+  // フォーカスが移っている状態でのEscapeもここを通る）からも、.menu-bar-item.openクラスの
+  // 除去まで含めて完全に閉じられるよう、closeFloatingAppMenuではなくcloseAllMenuBarDropdowns
+  // 相当を割り当てる（レビュー指摘: closeFloatingAppMenuだけだとopenクラスが残留し、
+  // ラベルの誤ハイライトや次回状態更新時の意図しない再オープンにつながる懸念があったため）。
+  closeAppMenuDropdowns = closeAllMenuBarDropdowns;
+
+  /**
+   * data-action付きの各項目（静的なfile/view/help内の項目、フィードバック/会員登録の単独項目、
+   * 動的なバージョン項目）で共通のアクション実行ロジック。旧実装ではappMenuBarのクリック
+   * ハンドラ内に直書きのswitch文としてあったが、floating-dropdown側からのIPCイベント
+   * （実際にユーザーがクリックするのはこちら）でも同じ分岐が必要になったため関数化した。
+   */
+  async function dispatchMenuAction(action, url) {
+    switch (action) {
+      case 'quit':
+        await window.api.appMenu.quit();
+        break;
+      case 'reload':
+        await window.api.appMenu.reload();
+        break;
+      case 'toggle-devtools':
+        await window.api.appMenu.toggleDevTools();
+        break;
+      case 'relayout':
+        await window.api.appMenu.relayout();
+        break;
+      case 'open-help':
+        openHelpModal();
+        break;
+      case 'open-welcome':
+        openWelcomeModal();
+        break;
+      case 'open-external':
+        await window.api.appMenu.openExternal(url);
+        break;
+      case 'open-pro-auth':
+        openProAuthModal();
+        break;
+      case 'open-feedback':
+        openFeedbackModal();
+        break;
+      case 'download-update':
+        await window.api.appMenu.downloadUpdate();
+        break;
+      case 'install-update':
+        await window.api.appMenu.installUpdate(true);
+        break;
+      case 'check-update':
+        await window.api.appMenu.checkUpdate();
+        break;
+    }
   }
 
   /** disabledなクリックできない項目（現在の状態表示だけの行）を1つ作る。 */
@@ -2361,18 +3167,24 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     return el;
   }
 
-  /** クリックできる項目を1つ作る。 */
-  function makeActionItem(label, onClick) {
+  /**
+   * クリックできる項目を1つ作る。actionIdはdispatchMenuActionが解釈できる識別子
+   * （'download-update'等）。data-actionとして持たせることで、floating側から
+   * domDropdownToRows経由でも同じactionIdを拾える（＝実際にクリックされるのは
+   * floating側のコピーだが、こちら（隠れているDOM本体）にも同じ情報を持たせておく必要がある）。
+   */
+  function makeActionItem(label, actionId) {
     const el = document.createElement('div');
     el.className = 'menu-bar-dropdown-item';
     el.textContent = label;
+    el.dataset.action = actionId;
     el.addEventListener('click', (e) => {
-      // data-action属性を持たないため、ここで止めないとクリックがappMenuBarの
-      // クリックハンドラまでバブリングし、「.menu-bar-item」判定分岐に落ちて
-      // バージョンドロップダウンが再度開いてしまう（閉じたはずが開き直る不具合）。
+      // data-action属性を持つため、通常はこのリスナーではなくappMenuBar側の
+      // [data-action]委譲ハンドラで処理される。ここでのリスナーは、万一この隠れたDOMが
+      // 直接クリックされるケース（開発者ツール等での操作）向けの保険として残している。
       e.stopPropagation();
       closeAllMenuBarDropdowns();
-      onClick();
+      dispatchMenuAction(actionId);
     });
     return el;
   }
@@ -2399,7 +3211,7 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
         break;
       case 'available':
         versionMenuDropdown.appendChild(makeDisabledItem(`新しいバージョン ${updater.version} があります`));
-        versionMenuDropdown.appendChild(makeActionItem('ダウンロードする', () => window.api.appMenu.downloadUpdate()));
+        versionMenuDropdown.appendChild(makeActionItem('ダウンロードする', 'download-update'));
         break;
       case 'downloading':
         versionMenuDropdown.appendChild(makeDisabledItem(`ダウンロード中… ${updater.percent}%`));
@@ -2409,18 +3221,18 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
         // 「PC自体を再起動する」と誤解されやすいという指摘を受け、「アプリの再起動」であることが
         // わかるよう文言に(アプリ)を明記。選択肢も1つに戻す（forceRunAfter=trueで常にアプリを
         // 自動再起動する。インストーラーの終了選択に委ねる「今すぐ更新」単独ボタンは削除した）。
-        versionMenuDropdown.appendChild(makeActionItem('今すぐ更新して再起動(アプリ)', () => window.api.appMenu.installUpdate(true)));
+        versionMenuDropdown.appendChild(makeActionItem('今すぐ更新して再起動(アプリ)', 'install-update'));
         break;
       case 'not-available':
         versionMenuDropdown.appendChild(makeDisabledItem('最新の状態です'));
-        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', () => window.api.appMenu.checkUpdate()));
+        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', 'check-update'));
         break;
       case 'error':
         versionMenuDropdown.appendChild(makeDisabledItem('確認できませんでした'));
-        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', () => window.api.appMenu.checkUpdate()));
+        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', 'check-update'));
         break;
       default:
-        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', () => window.api.appMenu.checkUpdate()));
+        versionMenuDropdown.appendChild(makeActionItem('アップデートを確認', 'check-update'));
     }
   }
 
@@ -2429,49 +3241,61 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     latestState = state;
     versionMenuItem.classList.toggle('has-update-badge', !!state.hasUpdateBadge);
     renderVersionDropdown(state);
+    // 開いている最中に状態が変化した場合（アップデート確認中→見つかった等）、floating側の
+    // 表示中コピーも追従させる。
+    if (versionMenuItem.classList.contains('open')) syncFloatingAppMenu(versionMenuItem);
+  }
+
+  /** #6対応: 配信開始通知1件のプラットフォーム表示名（通知対象はTwitch/Kickのみ）。 */
+  function notificationPlatformLabel(platform) {
+    return platform === 'kick' ? 'Kick' : 'Twitch';
+  }
+
+  /** 「通知」ドロップダウンの中身を新しい順に描画する。 */
+  function renderNotificationsDropdown(state) {
+    notificationsMenuDropdown.innerHTML = '';
+    const items = (state.items || []).slice(-20).reverse();
+    if (!items.length) {
+      notificationsMenuDropdown.appendChild(makeDisabledItem('通知はまだありません'));
+      return;
+    }
+    items.forEach((n) => {
+      const time = new Date(n.detectedAt).toLocaleString('ja-JP', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const label = `🔴 ${n.channel}（${notificationPlatformLabel(n.platform)}）配信開始 ${time}`;
+      notificationsMenuDropdown.appendChild(makeDisabledItem(label));
+    });
+  }
+
+  /** state-changed通知・初回取得の両方で呼ぶ。バッジ表示・一覧の中身を更新する。 */
+  function renderNotificationsState(state) {
+    notificationsMenuItem.classList.toggle('has-update-badge', !!state.hasUnread);
+    renderNotificationsDropdown(state);
+    // 開いている最中に新着通知が届いた場合、floating側の表示中コピーも追従させる。
+    if (notificationsMenuItem.classList.contains('open')) syncFloatingAppMenu(notificationsMenuItem);
   }
 
   appMenuBar.addEventListener('click', async (e) => {
     const actionEl = e.target.closest('[data-action]');
     if (actionEl) {
       closeAllMenuBarDropdowns();
-      const action = actionEl.dataset.action;
-      switch (action) {
-        case 'quit':
-          await window.api.appMenu.quit();
-          break;
-        case 'reload':
-          await window.api.appMenu.reload();
-          break;
-        case 'toggle-devtools':
-          await window.api.appMenu.toggleDevTools();
-          break;
-        case 'relayout':
-          await window.api.appMenu.relayout();
-          break;
-        case 'open-help':
-          openHelpModal();
-          break;
-        case 'open-welcome':
-          openWelcomeModal();
-          break;
-        case 'open-external':
-          await window.api.appMenu.openExternal(actionEl.dataset.url);
-          break;
-        case 'open-pro-auth':
-          openProAuthModal();
-          break;
-        case 'open-feedback':
-          openFeedbackModal();
-          break;
-      }
+      await dispatchMenuAction(actionEl.dataset.action, actionEl.dataset.url);
       return;
     }
     const item = e.target.closest('.menu-bar-item');
     if (!item) return;
     const wasOpen = item.classList.contains('open');
     closeAllMenuBarDropdowns();
-    if (!wasOpen) item.classList.add('open');
+    if (!wasOpen) {
+      item.classList.add('open');
+      syncFloatingAppMenu(item);
+      // #6対応: 通知タブを開いた＝内容を確認したとみなし、赤丸バッジを消す（既読化）。
+      if (item === notificationsMenuItem) window.api.markNotificationsRead();
+    }
   });
 
   // メニューが1つ開いている間は、他の項目にマウスを乗せただけで切り替わるようにする
@@ -2485,6 +3309,9 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
       if (openItem && openItem !== item) {
         openItem.classList.remove('open');
         item.classList.add('open');
+        syncFloatingAppMenu(item);
+        // #6対応: ホバーでの切り替えで通知タブが開いた場合も既読化する（クリック時と同様）。
+        if (item === notificationsMenuItem) window.api.markNotificationsRead();
       }
     });
   });
@@ -2496,9 +3323,25 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     if (e.key === 'Escape') closeAllMenuBarDropdowns();
   });
 
+  // floating-dropdown側（実際にユーザーがクリックする側）からの行クリックをこちらへ中継。
+  window.api.floatingDropdown.onEvent(async (evt) => {
+    if (evt.id !== 'app-menu' || evt.type !== 'action') return;
+    closeAllMenuBarDropdowns();
+    await dispatchMenuAction(evt.value?.action, evt.value?.url);
+  });
+
   window.api.appMenu.onStateChanged((state) => renderAppMenuState(state));
   (async () => {
     const state = await window.api.appMenu.getState();
     renderAppMenuState(state);
+  })();
+
+  // #6対応: 通知タブ。配信開始検知はmain.js側でchannels:get-stream-metaのポーリング
+  // （updateChipMetaBadges、CHIP_META_INTERVAL_MS=60秒間隔）のたびに行われ、新規通知が
+  // あればnotifications:state-changedがpushされる。ここでは初回状態の取得と購読のみ行う。
+  window.api.onNotificationsStateChanged((state) => renderNotificationsState(state));
+  (async () => {
+    const state = await window.api.getNotificationsState();
+    renderNotificationsState(state);
   })();
 })();
