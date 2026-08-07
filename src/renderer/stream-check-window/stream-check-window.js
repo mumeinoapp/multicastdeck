@@ -21,7 +21,13 @@
 //   LIVE優先→視聴者数順）。sortUnifiedFeedItems()参照。
 // - 誤って「＋追加」した場合に取り消せるよう、カードに「削除」ボタンを追加（channels:remove再利用）。
 
-const UNIFIED_FEED_AUTO_REFRESH_MS = 20 * 1000;
+// 2026-08-08追加: 要望⑦「自動更新間隔を最長5秒程度まで高速化」対応。
+// Twitchは公式Helix APIのため高頻度でも安全だが、YouTube側は非公式HTMLスクレイプ
+// （最大60チャンネル・同時4件）のため、単純に全体を5秒化するとレート制限/ブロックの
+// リスクが上がる。ユーザー確認の上、Twitch分のみ5秒間隔にし、YouTube分は従来通り
+// 20秒間隔を維持する方針にした（両者を別タイマーで独立させる）。
+const UNIFIED_FEED_TWITCH_AUTO_REFRESH_MS = 5 * 1000;
+const UNIFIED_FEED_YOUTUBE_AUTO_REFRESH_MS = 20 * 1000;
 
 // 2026-08-08実機報告対応: 「上からTwitch/YouTube/Kickの順を絶対にする」ため、main.js側の
 // fetchUnifiedFeed()（配信中→視聴者数順のみ）とは別に、このウィンドウの表示直前でのみ
@@ -98,7 +104,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let loading = false;
   let platformFilter = 'all';
   let unifiedFeedItems = [];
-  let autoTimer = null;
+  // 2026-08-08追加（要望⑦）: Twitch分とYouTube分で更新頻度を分けるため、タイマーを2本に分離。
+  let twitchAutoTimer = null;
+  let youtubeAutoTimer = null;
 
   // ---- 段階C追加（2026-08-08）: 自動追加の対象を選ぶ／フォロー配信者の自動追加 ----
   const tabBtns = Array.from(document.querySelectorAll('.stream-check-tab-btn'));
@@ -337,27 +345,32 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function load(options = {}) {
+    // 2026-08-08変更（要望⑦）: Twitch専用タイマー(5秒)とYouTube専用タイマー(20秒)が独立して
+    // load()を呼ぶようになったため、片方が実行中にもう片方のtickが来た場合はそのtickを
+    // 素直にスキップする（次のtickで再試行されるため実害はない。元々のKick省略時と同じ考え方）。
     if (loading) return;
     const includeKick = options.includeKick !== false;
+    const includeTwitch = options.includeTwitch !== false;
+    const includeYoutube = options.includeYoutube !== false;
     loading = true;
     refreshBtn.disabled = true;
     setStatus('読み込み中…', false);
     try {
-      const result = await window.streamCheckApi.fetchUnifiedFeed({ includeKick });
+      const result = await window.streamCheckApi.fetchUnifiedFeed({ includeKick, includeTwitch, includeYoutube });
       const items = (result && result.items) || [];
-      if (includeKick) {
-        unifiedFeedItems = items;
-      } else {
-        // 自動更新（includeKick:false）時は、直前まで表示していたKick分の結果をそのまま引き継ぐ
-        // （overlay-panel.jsのrefreshUnifiedFeed()と同じ挙動）。
-        const previousKickItems = unifiedFeedItems.filter((item) => item.platform === 'kick');
-        unifiedFeedItems = items.concat(previousKickItems);
-      }
+      // 今回取得しなかったプラットフォーム分は、直前まで表示していた内容をそのまま引き継ぐ
+      // （overlay-panel.jsのrefreshUnifiedFeed()と同じ、Kickで元々やっていた考え方をTwitch/
+      // YouTubeにも一般化したもの）。
+      let merged = items;
+      if (!includeKick) merged = merged.concat(unifiedFeedItems.filter((item) => item.platform === 'kick'));
+      if (!includeTwitch) merged = merged.concat(unifiedFeedItems.filter((item) => item.platform === 'twitch'));
+      if (!includeYoutube) merged = merged.concat(unifiedFeedItems.filter((item) => item.platform === 'youtube'));
+      unifiedFeedItems = merged;
       render();
       const errors = (result && result.errors) || {};
       const errMessages = [];
-      if (errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
-      if (errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
+      if (includeTwitch && errors.twitch) errMessages.push(`Twitch: ${errors.twitch}`);
+      if (includeYoutube && errors.youtube) errMessages.push(`YouTube: ${errors.youtube}`);
       if (includeKick && errors.kick) errMessages.push(`Kick: ${errors.kick}`);
       setStatus(errMessages.join(' / '), errMessages.length > 0);
       updatedAtEl.textContent = `最終更新: ${new Date().toLocaleTimeString('ja-JP')}`;
@@ -381,14 +394,27 @@ document.addEventListener('DOMContentLoaded', () => {
   // ウィンドウを開いている間、Twitch/YouTube分だけを短い間隔で自動更新する。Kick分はBrowserViewの
   // フルロードを伴い重いため自動更新の対象からは外し、初回取得・手動更新ボタン押下時のみ取得する
   // （overlay-panel.jsのstartUnifiedFeedAutoTimer()と同じ方針）。
+  // 2026-08-08変更（要望⑦）: Twitch(公式API、安全)は5秒間隔、YouTube(非公式HTMLスクレイプ、
+  // レート制限リスクあり)は従来通り20秒間隔を維持するため、タイマーを2本に分離した。
   function startAutoTimer() {
     stopAutoTimer();
-    autoTimer = setInterval(() => load({ includeKick: false }), UNIFIED_FEED_AUTO_REFRESH_MS);
+    twitchAutoTimer = setInterval(
+      () => load({ includeKick: false, includeYoutube: false }),
+      UNIFIED_FEED_TWITCH_AUTO_REFRESH_MS
+    );
+    youtubeAutoTimer = setInterval(
+      () => load({ includeKick: false, includeTwitch: false }),
+      UNIFIED_FEED_YOUTUBE_AUTO_REFRESH_MS
+    );
   }
   function stopAutoTimer() {
-    if (autoTimer) {
-      clearInterval(autoTimer);
-      autoTimer = null;
+    if (twitchAutoTimer) {
+      clearInterval(twitchAutoTimer);
+      twitchAutoTimer = null;
+    }
+    if (youtubeAutoTimer) {
+      clearInterval(youtubeAutoTimer);
+      youtubeAutoTimer = null;
     }
   }
 

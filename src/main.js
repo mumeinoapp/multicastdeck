@@ -3269,11 +3269,17 @@ const UNIFIED_FEED_YOUTUBE_CONCURRENCY = 4;
  */
 async function fetchUnifiedFeed(options = {}) {
   const includeKick = options.includeKick !== false;
+  // 2026-08-08追加（要望⑦）: Twitch(公式API)とYouTube(非公式HTMLスクレイプ)で自動更新の
+  // 頻度を分けられるよう、それぞれ個別にON/OFFできるオプションを追加。デフォルトは両方true
+  // （初回取得・手動更新ボタン押下時は従来通り全プラットフォームを取得）。
+  const includeTwitch = options.includeTwitch !== false;
+  const includeYoutube = options.includeYoutube !== false;
   const items = [];
   const errors = {};
 
   await Promise.all([
     (async () => {
+      if (!includeTwitch) return;
       try {
         const liveFollowed = await fetchFollowedLiveChannels();
         liveFollowed.forEach((s) => {
@@ -3300,6 +3306,10 @@ async function fetchUnifiedFeed(options = {}) {
       }
     })(),
     (async () => {
+      // 通常チャンネル取得・ピン留めチャンネル取得の両方がこの外側async関数内にあるため、
+      // ガードはこの1箇所のみでYouTube分全体を省略できる。将来ここに別のYouTube取得処理を
+      // 追加する場合も、この関数内に収める限り追加のガードは不要。
+      if (!includeYoutube) return;
       try {
         const subs = await scrapeYoutubeSubscribedChannels();
         const pinned = getFeedPinnedYoutubeChannels();

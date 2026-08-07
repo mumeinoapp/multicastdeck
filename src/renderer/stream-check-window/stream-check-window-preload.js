@@ -14,7 +14,9 @@ contextBridge.exposeInMainWorld('streamCheckApi', {
   closeWindow: () => ipcRenderer.invoke('stream-check-window:close'),
 
   // 配信中チャンネル一覧。options.includeKick=false でKick分（BrowserViewフルロードを伴い重い）を
-  // 省略できる（layout-window-preload.js / overlay-panel-preload.jsと同じ挙動）。
+  // 省略できる（layout-window-preload.js / overlay-panel-preload.jsと同じ挙動）。2026-08-08追加
+  // （要望⑦）: 同様にoptions.includeTwitch=false / includeYoutube=falseで各プラットフォーム分を
+  // 個別に省略でき、Twitch(5秒間隔)とYouTube(20秒間隔)を別タイマーで自動更新するのに使う。
   fetchUnifiedFeed: (options) => ipcRenderer.invoke('unified-feed:fetch', options),
 
   // カードの「＋追加」ボタン用。既存の手動チャンネル追加と全く同じIPC・同じ挙動を再利用する。
