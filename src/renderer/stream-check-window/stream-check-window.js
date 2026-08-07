@@ -122,7 +122,14 @@ document.addEventListener('DOMContentLoaded', () => {
   const layoutPlaceBtn = document.getElementById('stream-check-layout-place-btn');
   const layoutSelectionCountEl = document.getElementById('stream-check-layout-selection-count');
 
-  let loading = false;
+  // 2026-08-08修正: 単一のloadingフラグを廃止し、プラットフォームごとに独立したフラグへ変更。
+  // 理由: 従来はloadingを共有していたため、Kick（BrowserViewフルロードで数秒〜十数秒かかる）の
+  // 取得中はTwitch/YouTube側のtickも「実行中」扱いでスキップされてしまい、結果的にTwitchの
+  // 5秒間隔がKickの取得時間に引きずられて実質20秒程度まで遅くなっていた（実機確認で報告された
+  // 不具合）。プラットフォームごとに取得中かどうかを分けることで、遅いサイトが他のサイトの
+  // 更新をブロックしないようにし、各サイトは自分の取得が終わった時点で即座に画面へ反映される
+  // （「更新されたサイトから表示していく」方式）。
+  const loadingByPlatform = { twitch: false, youtube: false, kick: false };
   let platformFilter = 'all';
   let unifiedFeedItems = [];
   // 項目⑩追加: クリックした順に並ぶchannelKeyの配列（layout-window.jsのselectedOrderと同じ考え方）。
@@ -445,14 +452,22 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function load(options = {}) {
-    // 2026-08-08変更（要望⑦）: Twitch専用タイマー(5秒)とYouTube専用タイマー(20秒)が独立して
-    // load()を呼ぶようになったため、片方が実行中にもう片方のtickが来た場合はそのtickを
-    // 素直にスキップする（次のtickで再試行されるため実害はない。元々のKick省略時と同じ考え方）。
-    if (loading) return;
-    const includeKick = options.includeKick !== false;
-    const includeTwitch = options.includeTwitch !== false;
-    const includeYoutube = options.includeYoutube !== false;
-    loading = true;
+    // 2026-08-08修正: プラットフォームごとに「自分の取得が既に実行中か」だけを見てスキップする。
+    // 例えばKick専用タイマーの取得がまだ終わっていない間にKick専用タイマーの次のtickが来た場合は
+    // そのtickをスキップするが、Twitch専用タイマーのtickはKickの取得状況に関係なくそのまま実行する
+    // （プラットフォーム間で互いに待たせない。手動更新・初回読み込みのように複数プラットフォームを
+    // 一度に要求する呼び出しは、その中で既に実行中のプラットフォームだけを除外し、残りだけ取得する）。
+    let includeKick = options.includeKick !== false;
+    let includeTwitch = options.includeTwitch !== false;
+    let includeYoutube = options.includeYoutube !== false;
+    if (includeTwitch && loadingByPlatform.twitch) includeTwitch = false;
+    if (includeYoutube && loadingByPlatform.youtube) includeYoutube = false;
+    if (includeKick && loadingByPlatform.kick) includeKick = false;
+    if (!includeTwitch && !includeYoutube && !includeKick) return; // 対象が全て実行中だった場合は何もしない
+
+    if (includeTwitch) loadingByPlatform.twitch = true;
+    if (includeYoutube) loadingByPlatform.youtube = true;
+    if (includeKick) loadingByPlatform.kick = true;
     refreshBtn.disabled = true;
     setStatus('読み込み中…', false);
     try {
@@ -478,7 +493,11 @@ document.addEventListener('DOMContentLoaded', () => {
       grid.textContent = '';
       setStatus(`配信一覧の取得に失敗しました: ${String((err && err.message) || err)}`, true);
     } finally {
-      loading = false;
+      // このload()呼び出しで実際にfetchUnifiedFeedへ渡したプラットフォームだけを解除する
+      // （他のプラットフォーム専用タイマーが自分の取得中に立てたフラグを誤って消さないため）。
+      if (includeTwitch) loadingByPlatform.twitch = false;
+      if (includeYoutube) loadingByPlatform.youtube = false;
+      if (includeKick) loadingByPlatform.kick = false;
       // 段階F修正: Twitch/YouTube/Kickの自動更新タイマーはクールダウンを介さず直接load()を
       // 呼ぶため、手動更新のクールダウン中（manualRefreshCooldownActive）に自動更新が完了すると
       // ここで無条件にdisabled=falseへ戻してしまい、ボタン表示（残り秒数）と実際に押せる状態が
