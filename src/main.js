@@ -3237,6 +3237,15 @@ async function loadYoutubeLiveStreamFree(streamView, channelName, handleOrChanne
   }
 }
 
+// 2026-08-08追加（一時的な調査用）: YouTubeアイコンが3回の修正でも直らなかったため、
+// 実際にDOM側で何が見つかっている/いないのかを配信一覧ウィンドウのdevtools consoleで
+// 直接確認できるようにする。scrapeYoutubeSubscribedChannels()実行のたびに、最初の1件分の
+// アバター周辺のouterHTML（先頭1500文字）をここに保持し、fetchUnifiedFeedのレスポンスに
+// debug.youtubeAvatarHtmlとして載せ、stream-check-window.js側で一度だけconsole.logする。
+// 原因を特定できたら、この診断コード一式（この変数・fetchUnifiedFeed内のdebug付与・
+// stream-check-window.js側のconsole.log）は削除してよい。
+let lastYoutubeAvatarDebugHtml = null;
+
 /**
  * 統一フィード（ロードマップ項目6）用: ログイン済みYouTubeアカウントの登録チャンネル一覧を取得する。
  * YouTube Data API（subscriptions.list）は使わず、既存ログイン連携（persist:youtubeセッション）を
@@ -3337,6 +3346,9 @@ async function scrapeYoutubeSubscribedChannels() {
         var items = Array.from(document.querySelectorAll('ytd-channel-renderer'));
         var seen = {};
         var result = [];
+        // 2026-08-08追加（調査用）: 最初の1件だけ、アバター探索に使ったスコープ要素の
+        // outerHTMLをそのまま持ち帰る。実際のマークアップを見て初めて確実な原因特定ができるため。
+        var avatarDebugHtml = null;
         items.forEach(function (el) {
           try {
             var link = el.querySelector('#main-link') || el.querySelector('a[href^="/@"], a[href^="/channel/"]');
@@ -3350,17 +3362,26 @@ async function scrapeYoutubeSubscribedChannels() {
             // data-src / srcset へフォールバックする。取れなければ null のままにする（装飾要素
             // なので取得できなくても一覧取得自体は成功扱い）。
             var avatarUrl = extractAvatarUrl(el);
+            if (avatarDebugHtml === null) {
+              try {
+                var debugScope = el.querySelector('#avatar') || el;
+                avatarDebugHtml = String(debugScope.outerHTML || '').slice(0, 1500);
+              } catch (e2) {
+                avatarDebugHtml = '(outerHTML取得失敗: ' + String(e2 && e2.message) + ')';
+              }
+            }
             result.push({ href: href, name: name, avatarUrl: avatarUrl });
           } catch (e) {
             /* 1要素の解析失敗で一覧全体を落とさない */
           }
         });
-        return result;
+        return { items: result, avatarDebugHtml: avatarDebugHtml };
       })();
     `;
     const raw = await view.webContents.executeJavaScript(script);
-    if (!Array.isArray(raw)) return [];
-    return raw
+    const rawItems = raw && Array.isArray(raw.items) ? raw.items : [];
+    lastYoutubeAvatarDebugHtml = (raw && raw.avatarDebugHtml) || null;
+    return rawItems
       .map((item) => {
         const href = String(item.href || '');
         let handle = null;
@@ -3592,7 +3613,11 @@ async function fetchUnifiedFeed(options = {}) {
     if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
     return (b.viewerCount || 0) - (a.viewerCount || 0);
   });
-  return { items, errors };
+  // 2026-08-08追加（調査用、原因特定後に削除予定）: YouTubeアバター取得の診断用。
+  // includeYoutubeがtrueの呼び出し（scrapeYoutubeSubscribedChannelsが実行された場合）のみ
+  // 意味のある値が入る。stream-check-window.js側で一度だけconsole.logする。
+  const debug = includeYoutube && lastYoutubeAvatarDebugHtml ? { youtubeAvatarHtml: lastYoutubeAvatarDebugHtml } : undefined;
+  return { items, errors, debug };
 }
 
 /**

@@ -99,6 +99,10 @@ function formatElapsedStreamTime(startedAtIso) {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+// 2026-08-08追加（調査用、原因特定後に削除予定）: YouTubeアバターのデバッグHTMLを
+// devtools consoleに出すのは初回の1回だけにする（自動更新のたびに出ると流れて見づらいため）。
+let youtubeAvatarDebugLogged = false;
+
 /** プラットフォームバッジ用の記号（overlay-panel.js の platformBadgeHtml と同じ図柄）。 */
 function platformBadgeText(platform) {
   if (platform === 'youtube') return '▶';
@@ -490,6 +494,13 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus('読み込み中…', false);
     try {
       const result = await window.streamCheckApi.fetchUnifiedFeed({ includeKick, includeTwitch, includeYoutube });
+      // 2026-08-08追加（調査用、原因特定後に削除予定）: YouTubeアイコン不具合の調査のため、
+      // 実際にDOM側から見つかった1件分のアバター周辺HTMLをこのウィンドウのdevtools consoleに
+      // 一度だけ出す。F12/Ctrl+Shift+Iでこのウィンドウ自身のdevtoolsを開いて確認できる。
+      if (!youtubeAvatarDebugLogged && result && result.debug && result.debug.youtubeAvatarHtml) {
+        youtubeAvatarDebugLogged = true;
+        console.log('[MCD調査用] YouTubeアバター周辺のHTML:', result.debug.youtubeAvatarHtml);
+      }
       const items = (result && result.items) || [];
       // 今回取得しなかったプラットフォーム分は、直前まで表示していた内容をそのまま引き継ぐ
       // （overlay-panel.jsのrefreshUnifiedFeed()と同じ、Kickで元々やっていた考え方をTwitch/
