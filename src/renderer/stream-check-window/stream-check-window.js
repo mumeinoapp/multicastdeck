@@ -74,6 +74,16 @@ const FALLBACK_AVATAR_DATA_URI =
       '</svg>'
   );
 
+// 2026-08-08修正: YouTubeのアイコンが表示されない不具合の真因対策（main.js側でも同様の正規化を
+// 入れているが、念のためこちら側でも安全網として正規化する）。avatarUrlがまれに
+// "//yt3.ggpht.com/..." のようなプロトコル相対URLで渡ってくることがあり、このウィンドウは
+// file://で読み込まれているため、そのままimg.srcへ入れると"file://yt3.ggpht.com/..."のように
+// 誤って解決されて必ず読み込み失敗する。https:を補ってから使う。
+function normalizeAvatarUrl(url) {
+  if (!url) return url;
+  return url.indexOf('//') === 0 ? `https:${url}` : url;
+}
+
 /** 配信開始時刻（ISO8601文字列）から現在までの経過時間を "1:23:45" / "23:45" 形式で返す。無効な値ならnull。 */
 // layout-window.js の formatElapsedStreamTime() / renderer.js の同名関数と同じ仕様（表示の見え方を
 // 揃えるため）。独立ウィンドウからはそれらのスコープを参照できないため、同じ実装をここにも置いている。
@@ -239,7 +249,7 @@ document.addEventListener('DOMContentLoaded', () => {
       avatar.onerror = null; // フォールバック画像自体の読み込み失敗で無限ループしないように
       avatar.src = FALLBACK_AVATAR_DATA_URI;
     };
-    avatar.src = item.avatarUrl || FALLBACK_AVATAR_DATA_URI;
+    avatar.src = normalizeAvatarUrl(item.avatarUrl) || FALLBACK_AVATAR_DATA_URI;
     card.appendChild(avatar);
 
     const main = document.createElement('div');

@@ -3361,6 +3361,14 @@ async function scrapeYoutubeSubscribedChannels() {
           return result;
         }
         function resolveImgSrc(img) {
+          // img.src/img.currentSrc（プロパティ）はブラウザが自動的に絶対URLへ解決してくれるが、
+          // getAttribute('data-src')・getAttribute('srcset')は生の属性値をそのまま返すため、
+          // YouTube側が "//yt3.ggpht.com/..." のようなプロトコル相対URLを使っている場合は
+          // そのまま返ってきてしまう。これをこのファイル一覧取得（youtube.com上で実行）の
+          // 戻り値としてstream-check-window.js（file://で読み込まれる別ウィンドウ）側の
+          // <img src>にそのまま渡すと、"file://yt3.ggpht.com/..."のように誤って解決され
+          // 常に読み込み失敗してしまう（2026-08-08、2度の修正でも直らなかった問題の真因と推測）。
+          // 最後にまとめて先頭"//"をhttps:に正規化する。
           var src = img.currentSrc || img.src || '';
           if (!src || src.indexOf('data:image/gif') === 0 || src.indexOf('data:image/png') === 0) {
             src = img.getAttribute('data-src') || '';
@@ -3372,6 +3380,7 @@ async function scrapeYoutubeSubscribedChannels() {
               if (first) src = first;
             }
           }
+          if (src && src.indexOf('//') === 0) src = 'https:' + src;
           return src || null;
         }
         function extractAvatarUrl(el) {
