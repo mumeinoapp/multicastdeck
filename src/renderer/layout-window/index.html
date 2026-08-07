@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<!--
+  複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階）のHTML。
+  main.jsのcreateLayoutWindow()がloadFileで読み込む、独立したBrowserWindowの中身。
+  第1段階では「現在配信中のチャンネルをカードのグリッドで表示するだけ」で、クリックによる
+  MAIN/SUB割り当てロジックは第2段階以降で追加する。
+-->
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- img-src: Twitch/YouTube/Kickのプロフィール画像（リモートのhttpsURL）と、
+         読み込み失敗時のフォールバック用インラインSVG（data:）を表示するために必要。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:;"
+    />
+    <title>複窓レイアウト設定</title>
+    <link rel="stylesheet" href="layout-window.css" />
+  </head>
+  <body>
+    <div class="layout-window">
+      <header class="layout-window-header">
+        <span class="layout-window-title">複窓レイアウト設定</span>
+        <div class="layout-window-header-actions">
+          <button type="button" class="layout-window-refresh" id="layout-refresh-btn">更新</button>
+          <button type="button" class="layout-window-close" id="layout-close-btn" aria-label="閉じる">×</button>
+        </div>
+      </header>
+
+      <div class="layout-window-status" id="layout-status" role="status"></div>
+
+      <main class="layout-window-body">
+        <div class="layout-card-grid" id="layout-card-grid"></div>
+      </main>
+    </div>
+
+    <script src="layout-window.js"></script>
+  </body>
+</html>

@@ -1,0 +1,247 @@
+/*
+ * 複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階）の見た目。
+ * overlay-panel.css のブランドトーン（ダーク背景 #1a1a1e / カード #26262e /
+ * タイトルのグラデーション linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%) / 角丸 / 影）を
+ * 踏襲しつつ、こちらは独立ウィンドウ全体を使うグリッドレイアウトにしてある。
+ * メインウィンドウの ../style.css は読み込まない（独立ウィンドウなので、あちらの
+ * position:fixed 前提の指定を打ち消す必要がなく、意図しない巻き添えも避けられる）。
+ */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #1a1a1e;
+  color: #e4e4e7;
+  font-family: -apple-system, 'Segoe UI', 'Hiragino Kaku Gothic ProN', sans-serif;
+  overflow: hidden;
+}
+
+.layout-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* ---- ヘッダー ---- */
+.layout-window-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #1f1f23;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.layout-window-title {
+  font-size: 15px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #4f8cff 0%, #22d3ee 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.layout-window-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.layout-window-refresh {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #26262e;
+  color: #e4e4e7;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.layout-window-refresh:hover:not(:disabled) {
+  background: #2f2f39;
+}
+
+.layout-window-refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.layout-window-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.layout-window-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+/* ---- ステータス行（読み込み中・エラー・件数） ---- */
+.layout-window-status {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #a1a1aa;
+  padding: 8px 16px 0;
+  min-height: 0;
+}
+
+.layout-window-status:empty {
+  display: none;
+}
+
+.layout-window-status.error {
+  color: #ff9f43;
+}
+
+/* ---- カードグリッド ---- */
+.layout-window-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 16px;
+}
+
+.layout-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.layout-card-empty {
+  color: #a1a1aa;
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
+}
+
+.layout-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #26262e;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  min-width: 0;
+}
+
+.layout-card-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #2c2c35;
+  flex-shrink: 0;
+}
+
+.layout-card-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+
+.layout-card-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.layout-card-name {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-card-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #f04747;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.layout-card-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f04747;
+  display: inline-block;
+}
+
+/* タイトルは2行までで打ち切る（長い配信タイトルでカードの高さが揃わなくなるのを防ぐ） */
+.layout-card-title {
+  font-size: 12px;
+  color: #d4d4d8;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.layout-card-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #9aa3b2;
+  min-width: 0;
+}
+
+.layout-card-category {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layout-card-elapsed {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.layout-card-viewers {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- プラットフォームバッジ（overlay-panel側の配色に合わせる） ---- */
+.layout-card-platform-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.layout-card-platform-badge.twitch {
+  color: #a970ff;
+}
+
+.layout-card-platform-badge.youtube {
+  color: #ff0000;
+}
+
+.layout-card-platform-badge.kick {
+  color: #53fc18;
+  font-weight: 700;
+}

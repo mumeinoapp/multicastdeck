@@ -75,6 +75,10 @@ contextBridge.exposeInMainWorld('api', {
   stopZapping: () => ipcRenderer.invoke('zapping:stop'),
   skipZapping: () => ipcRenderer.invoke('zapping:skip'),
 
+  // 複窓レイアウト設定（2026-08-08新設）。独立したBrowserWindowを開くだけ。
+  // 閉じる操作はそのウィンドウ側（layout-window-preload.js）が担当する。
+  openLayoutWindow: () => ipcRenderer.invoke('layout-window:open'),
+
   hideContentViews: () => ipcRenderer.invoke('ui:hide-content-views'),
   showContentViews: () => ipcRenderer.invoke('ui:show-content-views'),
   openSidePanel: (id, width) => ipcRenderer.invoke('ui:open-side-panel', { id, width }),

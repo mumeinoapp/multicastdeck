@@ -134,6 +134,15 @@ const store = new Store({
 /** @type {BrowserWindow} */
 let mainWindow;
 
+/**
+ * 複窓レイアウト設定ウィンドウ（2026-08-08新設）。メインウィンドウとは独立した
+ * BrowserWindow（parent指定なし・常に最前面）で、単一インスタンスのみを許可する。
+ * TDZ（宣言前使用）を避けるため、createLayoutWindow()やmainWindow.on('closed')より
+ * 手前のこの位置で宣言しておく。
+ * @type {BrowserWindow|null}
+ */
+let layoutWindow = null;
+
 // 「バージョン」メニューの表示状態。{ status: 'idle'|'checking'|'available'|
 // 'not-available'|'downloading'|'downloaded'|'error', version?, percent? }
 let updaterState = { status: 'idle' };
@@ -1274,6 +1283,12 @@ function createMainWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // 複窓レイアウト設定ウィンドウは parent 指定を持たない完全独立ウィンドウ（＝Electronの
+    // 親子連動では閉じない）ため、メインウィンドウが閉じられた時に取り残されないよう
+    // 明示的に閉じる。既にユーザーが閉じていれば layoutWindow は null になっている。
+    if (layoutWindow && !layoutWindow.isDestroyed()) {
+      layoutWindow.close();
+    }
   });
 
   // ネイティブのアプリケーションメニューは使わない。ファイル/表示/ヘルプ/バージョンは
@@ -1283,6 +1298,70 @@ function createMainWindow() {
   // 要望があり、ネイティブメニューでは項目の位置・サイズを自由に制御できない（Windowsでは
   // アイコンは常にラベルの左側固定）ため、HTML/CSSで自由に配置できる自作メニューに切り替えた。
   Menu.setApplicationMenu(null);
+}
+
+/**
+ * 複窓レイアウト設定ウィンドウを開く（2026-08-08新設、第1段階）。
+ *
+ * 既存のオーバーレイパネル（BrowserView方式）とは意図的に別系統の、完全に独立した
+ * BrowserWindowとして実装している。理由と仕様は以下の通り:
+ * - parent は指定しない（メインウィンドウの子にしない）。配信タイルの上に被せるのではなく、
+ *   OSレベルで自由にドラッグ移動できる別ウィンドウとして扱いたいため。
+ * - alwaysOnTop: true。配置作業中にメインウィンドウの裏へ回り込まないようにする。
+ * - frame: true。タイトルバーのドラッグ移動・閉じるボタンをOS標準の実装に任せる
+ *   （カスタムタイトルバーは第1段階では不要）。
+ * - ウィンドウ外クリックでは閉じない（フォーカス喪失で閉じる処理は入れない）。
+ *   閉じられるのは「HTML側の×ボタン」「ESCキー」「OSの閉じるボタン」の3つだけ。
+ *
+ * 既に開いている場合は多重生成せず、既存ウィンドウをフォーカスするだけにする。
+ */
+function createLayoutWindow() {
+  if (layoutWindow && !layoutWindow.isDestroyed()) {
+    if (layoutWindow.isMinimized()) layoutWindow.restore();
+    layoutWindow.focus();
+    return layoutWindow;
+  }
+
+  layoutWindow = new BrowserWindow({
+    width: 900,
+    height: 700,
+    // カードのグリッドが1列まで潰れて実用性が無くなるサイズまでは縮められないようにする。
+    minWidth: 520,
+    minHeight: 400,
+    title: '複窓レイアウト設定',
+    alwaysOnTop: true,
+    // ちらつき防止（表示準備が整ってから見せる）。既存のBrowserView群と同じ考え方。
+    show: false,
+    frame: true,
+    backgroundColor: '#1a1a1e',
+    webPreferences: {
+      preload: path.join(__dirname, 'renderer', 'layout-window', 'layout-window-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  layoutWindow.setMenuBarVisibility(false);
+  layoutWindow.loadFile(path.join(__dirname, 'renderer', 'layout-window', 'index.html'));
+
+  layoutWindow.once('ready-to-show', () => {
+    if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.show();
+  });
+
+  // ESCキーで閉じる。既存の forwardEscapeKey() はBrowserView（＝メインウィンドウのrenderer側へ
+  // 転送する前提）専用なので流用せず、このウィンドウ単体で完結する形で実装する。
+  layoutWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown' && input.key === 'Escape') {
+      if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.close();
+    }
+  });
+
+  layoutWindow.on('closed', () => {
+    layoutWindow = null;
+  });
+
+  return layoutWindow;
 }
 
 /** 「バージョン」メニュー右上の赤丸バッジを出すべきか。renderer側に渡す状態にも使う。 */
@@ -2988,6 +3067,12 @@ async function fetchUnifiedFeed(options = {}) {
             isTarget: isAutoTuneInTarget('twitch', s.login),
             isPinned: false,
             isLive: true,
+            // 2026-08-08追加（複窓レイアウト設定ウィンドウのカード表示用）。Twitchのみ対応で、
+            // YouTube/Kickは値を持たない（表示側では欠けているものを単に出さない扱い）。
+            // 既存の配信チェックパネル側は参照しないため、増えても挙動は変わらない。
+            title: s.title || '',
+            category: s.gameName || '',
+            startedAt: s.startedAt || null,
           });
         });
       } catch (err) {
@@ -4428,8 +4513,20 @@ async function fetchFollowedLiveChannels() {
       headers: { 'Client-Id': clientId, Authorization: `Bearer ${token}` },
     });
     if (res.status !== 200) throw new Error(`配信状況の取得に失敗しました: ${res.status}`);
+    // title / gameName / startedAt は複窓レイアウト設定ウィンドウ（2026-08-08新設）の
+    // カード表示用に追加した。キー名は fetchTwitchStreamMeta() 側（チップのツールチップ用）と
+    // 揃えてある。startedAt はHelix仕様通りISO8601（UTC）文字列で、経過時間の計算は
+    // 表示側（renderer）で Date.now() との差分から行う。
     (res.json.data || []).forEach((s) =>
-      live.push({ login: s.user_login, userId: String(s.user_id || ''), viewerCount: s.viewer_count || 0, avatarUrl: null })
+      live.push({
+        login: s.user_login,
+        userId: String(s.user_id || ''),
+        viewerCount: s.viewer_count || 0,
+        avatarUrl: null,
+        title: s.title || '',
+        gameName: s.game_name || '',
+        startedAt: s.started_at || null,
+      })
     );
   }
 
@@ -5936,6 +6033,18 @@ ipcMain.handle('kick:resolve-chatroom-id', (_e, channelName) => resolveKickChatr
 
 // プラットフォーム横断の統一フィード（ロードマップ項目6）。手動更新ボタンからのみ呼ばれる（常時ポーリングなし）。
 ipcMain.handle('unified-feed:fetch', (_e, options) => fetchUnifiedFeed(options || {}));
+
+// ---- 複窓レイアウト設定ウィンドウ（2026-08-08新設、第1段階） ----
+// open はメインウィンドウの自作メニューバー（表示メニュー）から、close は当該ウィンドウ自身の
+// ×ボタン（layout-window.js）から呼ばれる。ESCキー・OSの閉じるボタンはmain.js側で処理される。
+ipcMain.handle('layout-window:open', () => {
+  createLayoutWindow();
+  return true;
+});
+ipcMain.handle('layout-window:close', () => {
+  if (layoutWindow && !layoutWindow.isDestroyed()) layoutWindow.close();
+  return true;
+});
 
 // Auto Tune-Inの対象指定チャンネル（フィード改善③）
 ipcMain.handle('auto-tune-in:get-targets', () => getAutoTuneInTargets());

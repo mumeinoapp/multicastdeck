@@ -2675,6 +2675,11 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
       case 'relayout':
         await window.api.appMenu.relayout();
         break;
+      // 複窓レイアウト設定（2026-08-08新設）。既存のオーバーレイパネル方式とは別系統の
+      // 独立したBrowserWindowをmain.js側で開く。
+      case 'open-layout-window':
+        await window.api.openLayoutWindow();
+        break;
       case 'open-help':
         openHelpModal();
         break;
