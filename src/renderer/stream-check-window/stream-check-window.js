@@ -124,6 +124,14 @@ function autoTuneInTargetTitle(platform) {
     : '自動追加の対象にする（チェックした配信者のみが対象になります）';
 }
 
+// 依頼#33: このウィンドウ自体のpremiumUnlocked状態。メインウィンドウのrenderer.jsとは
+// 別プロセスのため、専用にpreload経由で取得・購読する（stream-check-window-preload.js参照）。
+let premiumUnlocked = false;
+function applyPremiumLockUi() {
+  document.getElementById('stream-check-content-wrap')?.classList.toggle('pro-content-locked', !premiumUnlocked);
+  document.getElementById('stream-check-lock-overlay')?.classList.toggle('hidden', premiumUnlocked);
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const grid = document.getElementById('stream-check-card-grid');
   const statusEl = document.getElementById('stream-check-status');
@@ -947,9 +955,35 @@ document.addEventListener('DOMContentLoaded', () => {
     // Twitch+Kick分とYouTube分を別々のload()呼び出しに分離し、速い方は待たずに即座に表示する。
     // load()内のmerge処理（!includeX時に既存unifiedFeedItemsから該当プラットフォーム分を
     // 引き継ぐロジック）は元々この並行呼び出しを想定して作られているため、そのまま流用できる。
-    load({ includeYoutube: false });
-    load({ includeTwitch: false, includeKick: false });
-    startAutoTimer();
-    refreshAutoTuneInStatus();
+    //
+    // 依頼#33: 無料会員はウィンドウを開けるが、中身は丸ごとロック表示にするだけで、実際の
+    // フェッチ（Twitch/YouTube/Kick API消費）・自動更新タイマー・Twitch連携状態確認は行わない
+    // （無料会員の操作でAPIクォータを消費しないため）。
+    try {
+      premiumUnlocked = !!(await window.streamCheckApi.getPremiumUnlocked());
+    } catch (_) {
+      premiumUnlocked = false;
+    }
+    applyPremiumLockUi();
+    if (premiumUnlocked) {
+      load({ includeYoutube: false });
+      load({ includeTwitch: false, includeKick: false });
+      startAutoTimer();
+      refreshAutoTuneInStatus();
+    }
+    window.streamCheckApi.onPremiumChanged((value) => {
+      const wasUnlocked = premiumUnlocked;
+      premiumUnlocked = !!value;
+      applyPremiumLockUi();
+      if (premiumUnlocked && !wasUnlocked) {
+        // ロック解除された瞬間（会員登録完了等）に、初回同様のフェッチを開始する。
+        load({ includeYoutube: false });
+        load({ includeTwitch: false, includeKick: false });
+        startAutoTimer();
+        refreshAutoTuneInStatus();
+      } else if (!premiumUnlocked && wasUnlocked) {
+        stopAutoTimer();
+      }
+    });
   })();
 });

@@ -16,6 +16,23 @@ const { autoUpdater } = require('electron-updater');
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
+// 2026-08-09追加（実機報告対応）: 単一インスタンス化。これまで無かったため、誤ってアプリを
+// 二重起動すると、2つ目のプロセスがYouTube埋め込みサーバー用のローカルHTTPポート(17654、
+// YOUTUBE_EMBED_SERVER_PORTを参照)を1つ目のプロセスと取り合い、`listen EADDRINUSE`が
+// 未処理の例外としてクラッシュダイアログに出てしまっていた（実機報告: 配信一覧からYouTubeを
+// 追加した際にエラーダイアログが出た件）。requestSingleInstanceLock()で2つ目以降の起動を即座に
+// 終了させ、代わりに既存インスタンスのウィンドウを前面化する（一般的なElectronアプリの定石）。
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
+}
+
 const store = new Store({
   name: 'multistream-drops-settings',
   defaults: {
@@ -27,6 +44,10 @@ const store = new Store({
     // 全タブ統合チャットのコメント本文（配信名・ユーザー名は除く）に適用するフォント。
     // 空文字列 = 未指定（デフォルト＝現状通りの見た目、実質Twitchのフォント）。
     commentFontFamily: '',
+    // 依頼#31: 配信タイル下部のメタ情報帯（tile-info-bar、配信者名・タイトル・視聴者数等）の
+    // ON/OFF。true=表示（従来通り）。OFF時はTILE_INFO_BAR_HEIGHT分の高さも配信映像側へ返す
+    // （applyTileBoundsFromRect/edgeConfigFor参照）。
+    tileInfoBarEnabled: true,
     helixClientId: '',
     helixClientSecret: '',
     // Kick Developer Portal（kick.com/settings/developer）で発行するOAuth 2.1（PKCE必須）アプリの
@@ -52,8 +73,20 @@ const store = new Store({
     // 「このチャンネルの発言を統合表示に含めない」を選べる。上のchatHiddenとは別物（そちらは
     // タイル個別のチャット埋め込み表示、こちらは統合パネルの表示対象フィルタ）。
     chatIntegrationHidden: {},
+    // 2026-08-09追加: チャット統合パネルのワード検索機能に付随する「常時検知ワード」一覧。
+    // 検索欄への一時入力とは別に、ここに登録した単語は検索していない間も常にハイライト表示され続ける
+    // （例: 自分の名前・特定ワードの見逃し防止用）。string[]（トリム済み・重複無し）。
+    chatWatchWords: [],
+    // 2026-08-09追加: 全タブ統合を上にスクロールして過去ログを読んでいる間、新着メッセージの
+    // DOM追加（＋古い行の間引き）を一時停止するかどうか。ONの場合、遡っている間の新着は
+    // renderer側でメモリ上にバッファし、最下部へ戻った時点でまとめて反映する
+    // （appendTimelineMessage/flushChatScrollLockBuffer参照）。
+    chatTimelineScrollLockEnabled: false,
+    // 2026-08-09追加: チャット統合の設定ウィンドウ（歯車アイコン）のサイズ・位置。
+    // null | { x, y, width, height }
+    chatSettingsWindowBounds: null,
     // #6対応: 登録チャンネルの配信開始通知の履歴。[{ id, channel, platform, title, detectedAt }]
-    // 直近100件のみ保持（recordStreamStartNotifications参照）。
+    // 直近5件のみ保持（detectAndRecordNewlyLive参照、通知タブ刷新2026-08-09で100件→5件に変更）。
     streamStartNotifications: [],
     // 通知タブを最後に開いた時刻（ms epoch）。これより新しいdetectedAtの通知があれば
     // 未読とみなし「通知」メニュー項目に赤丸バッジ（.has-update-badge、バージョン項目と同じ仕組み）を表示する。
@@ -65,10 +98,9 @@ const store = new Store({
     // ゆるい部分一致のベストエフォート）
     zappingFilters: { language: '', gameName: '', tags: [], platform: 'twitch' },
     channelVolumes: {}, // { [channelName]: 0-100 } チャンネル毎の個別音量（未設定なら100扱い）
-    // ザッピングタイル専用の音量（0-100）。ザッピングは切替のたびに表示チャンネル名が変わり
-    // channelVolumesのキー（チャンネル名）に紐づく音量がremoveChannelで都度消えてしまうため、
-    // 「ザッピングタイル」という実体に対する音量として別キーで永続化し、切替のたびに新チャンネルへ
-    // 再適用する（アプリ再起動後、次にザッピングを開始した時にも復元される）。
+    // ザッピングタイル専用の音量（0-100）。ザッピングは切替のたびに表示チャンネル名が変わるため、
+    // 個々のチャンネル名ではなく「ザッピングタイル」という実体に対する音量として別キーで永続化し、
+    // 切替のたびに新チャンネルへ再適用する（アプリ再起動後、次にザッピングを開始した時にも復元される）。
     zappingVolume: 100,
     inputHistories: {}, // { [historyKey]: string[] } 入力欄の上下キー履歴（チャンネル名・Drops対象ゲーム名など）
     dropsAutoDefaultMaxTiles: 3, // Drops自動追加/削除「上限」入力欄の初期値（最後に使った値を記憶する）
@@ -87,6 +119,13 @@ const store = new Store({
     // YouTube: 「登録中なら誰でも」を60秒間隔で全員チェックするのはページ取得コストが高すぎるため非対応。
     //   YouTubeの自動追加は必ずこのリストに入っている人だけが対象（空なら何もしない）。
     autoTuneInTargets: [],
+    // YouTube通知対象リスト（通知タブ刷新2026-08-09）。[{ channel: string, displayName: string }]
+    // 「メイン画面にタイル追加されている間だけが通知対象」だと、追加した時点で既にライブと
+    // 分かっているため通知の意味が薄いというユーザー指摘を受け、タイル追加/削除のライフサイクルから
+    // 切り離した専用リストにした。Twitch/KickのようなAPIベースのフォロー一覧取得手段がYouTubeには
+    // 無いため、通知タブから手動で登録・削除する運用（detectAndRecordNewlyLive/
+    // runYoutubeNotificationTargetsCheck参照）。用途が異なるためautoTuneInTargetsとは意図的に別管理。
+    youtubeNotificationTargets: [],
     // フィードに常時表示する「ピン留め」YouTubeチャンネル（統一フィード改善要望）。
     // 自動追加の対象指定(autoTuneInTargets)とは完全に独立しており、こちらはオンライン・オフライン
     // 問わずフィード一覧に表示し続けるためだけのもの（自動でタイル追加はされない）。
@@ -150,6 +189,11 @@ let mainWindow;
 // このウィンドウの「レイアウト配置」ボタンから現役で使われているため維持している。
 let streamCheckWindow = null;
 
+// チャット統合の設定ウィンドウ（2026-08-09新設）。歯車アイコンから開く、常時検知ワード・
+// 遡り中の自動更新停止トグルを扱う独立BrowserWindow。createStreamCheckWindow()と同じ
+// frame:false+parent:mainWindow方式（詳細はcreateChatSettingsWindow()のコメント参照）。
+let chatSettingsWindow = null;
+
 // 「バージョン」メニューの表示状態。{ status: 'idle'|'checking'|'available'|
 // 'not-available'|'downloading'|'downloaded'|'error', version?, percent? }
 let updaterState = { status: 'idle' };
@@ -175,10 +219,17 @@ function manualCheckForUpdates() {
 /** チャンネル毎の { streamView, chatView, channel } を保持 */
 const streamViews = new Map();
 
-// #6対応: 通知タブの配信開始検知用。channel -> 直近ポーリング時点でライブだったか(boolean)。
-// キーの有無で「一度でも観測したか」を判定し、初回観測時（アプリ起動直後や手動追加直後）は
-// 通知を出さず記録のみ行う（recordStreamStartNotifications参照）。
+// #6対応: 通知タブの配信開始検知用。`${platform}:識別子.toLowerCase()` -> { live: boolean, missStreak: number }。
+// キーの有無で「一度でも観測したか」を判定し、初回観測時（アプリ起動直後やフォロー/タイル追加直後）は
+// 通知を出さず記録のみ行う（detectAndRecordNewlyLive参照）。プラットフォーム間の識別子重複を
+// 避けるためplatformプレフィックス付きキーにしている（通知タブ刷新2026-08-09、フォロー基準化）。
+// missStreak: 通知タブ刷新（2026-08-09、通知重複バグの修正）で追加。TwitchのHelix APIレート制限や
+// Kickのスクレイプ失敗等で「実際は配信中なのに1回だけmetaから欠落する」ことがあり、それを
+// 即座に「オフラインになった」と確定させると、次の正常な取得で「オフライン→ライブ」の
+// 誤検知（＝同じ配信の重複通知）につながっていた。連続でOFFLINE_CONFIRM_MISS_STREAK回
+// 観測されるまではliveのまま扱う（＝1回の欠落だけでは状態を倒さない）猶予を設けている。
 const notificationsKnownLiveMap = new Map();
+const OFFLINE_CONFIRM_MISS_STREAK = 2;
 
 /** Drops インベントリ用 BrowserView（オンデマンドでのみ生成） */
 let dropsView = null;
@@ -406,7 +457,7 @@ const OVERLAY_PANEL_DEFAULT_WIDTH = 360;
 // overlayPanelView（オーバーレイパネル用BrowserView）にも中継する必要があるpush通知チャンネル。
 // notifyRenderer()はメインウィンドウにしか送らないため、パネル側UIが購読しているものだけを
 // ここに列挙して二重送信する（無関係な高頻度チャンネルまで中継しないよう最小限に留める）。
-const OVERLAY_PANEL_FORWARDED_CHANNELS = new Set(['auto-tune-in:error', 'auto-tune-in:auth-lost']);
+const OVERLAY_PANEL_FORWARDED_CHANNELS = new Set(['auto-tune-in:error', 'auto-tune-in:auth-lost', 'premium:changed']);
 
 // フィードバックモーダルの下書き（件名・本文）。centered化に伴い外側クリックでも閉じられる
 // ようになったため、閉じる＝入力内容の消失にならないよう、BrowserView自体は
@@ -1122,6 +1173,10 @@ function createFloatingDropdown(id) {
   // （実機確認で発覚: アプリ起動後・初回オープン時にチャンネル名履歴の中身が空のまま
   // 表示されるバグ）。直近のsend内容を憶えておき、did-finish-load後に確実に再送する。
   let pendingSend = null; // { channel, payload }
+  // app-menu余白バグ修正（2026-08-10）: setRect()で最後に適用したクランプ後の矩形を憶えておき、
+  // reportHeight()（floating-dropdown.js側が実際の描画内容から測ったscrollHeightを都度報告する
+  // 経路）が来た時に、位置(x,y)・幅はそのまま、高さだけを実寸へ補正するために使う。
+  let lastRect = null;
 
   function ensure() {
     if (view) return view;
@@ -1159,7 +1214,24 @@ function createFloatingDropdown(id) {
     if (!view || !mainWindow || !open) return;
     const clamped = clampRect(rect);
     if (!clamped) return;
+    lastRect = clamped;
     view.setBounds(clamped);
+  }
+
+  // app-menu余白バグ修正（2026-08-10）: floating-dropdown.js側が実際に描画した中身の高さ
+  // (scrollHeight)を都度報告してくる経路。位置・幅はsetRect()で設定済みの値を維持し、
+  // 高さだけをこの実測値へ補正する（メインウィンドウ側の隠れたDOMから概算した高さは、
+  // フォントサイズ等がstyle.css/floating-dropdown.css間でずれているとファイル/表示/ヘルプ/
+  // バージョン/通知の各ドロップダウン下部に余分な空白を生む問題があった）。
+  function reportHeight(height) {
+    if (!view || !mainWindow || !open || !lastRect) return;
+    if (!Number.isFinite(height) || height <= 0) return;
+    const corrected = clampRect({ ...lastRect, height });
+    if (!corrected) return;
+    if (corrected.height === lastRect.height && corrected.width === lastRect.width
+      && corrected.x === lastRect.x && corrected.y === lastRect.y) return;
+    lastRect = corrected;
+    view.setBounds(corrected);
   }
 
   function openAt(rect) {
@@ -1190,6 +1262,7 @@ function createFloatingDropdown(id) {
   function close() {
     if (!open) return;
     open = false;
+    lastRect = null;
     try {
       if (view && mainWindow && isViewAttached(view)) {
         mainWindow.removeBrowserView(view);
@@ -1215,7 +1288,7 @@ function createFloatingDropdown(id) {
     return open;
   }
 
-  return { id, openAt, setRect, close, send, isOpen };
+  return { id, openAt, setRect, close, send, isOpen, reportHeight };
 }
 
 const floatingDropdowns = {
@@ -1236,6 +1309,9 @@ function hideContentViewsForOverlay() {
       /* 既に外れている場合は無視 */
     }
   });
+  // 2026-08-09追加: アクティブタイル情報帯も他の配信タイル同様、オーバーレイ表示中は隠す
+  // （隠さないとモーダル等の上に浮いて見えてしまう）。
+  hideActiveInfoBarView();
   contentViewsHiddenForOverlay = true;
   // タイル情報帯（renderer.js側のHTML要素）もモーダル等の下に透けて見えないよう明示的に隠す
   // （z-indexだけに頼らない二重対策）。
@@ -1255,6 +1331,11 @@ function showContentViewsForOverlay() {
   relayoutStreamViews();
   relayoutDropsView();
   relayoutKickDropsView();
+  // 2026-08-09追加: オーバーレイを閉じた後、直前にアクティブだったタイルが残っていれば
+  // アクティブタイル情報帯を再度前面化する（relayoutStreamViews()後、bounds確定後に呼ぶ）。
+  if (activeTileChannel && streamViews.has(activeTileChannel)) {
+    updateActiveInfoBar(activeTileChannel);
+  }
   notifyRenderer('tile:bars-visible', true);
 }
 
@@ -1308,6 +1389,12 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 通知タブ刷新（2026-08-09）: 最小化/バックグラウンド時にChromiumがrenderer側の
+      // setInterval等を間引く（backgroundThrottling既定=true）ため、チップの視聴者数バッジ
+      // 更新等のタイマーが遅延・停止する余地があった。配信開始通知の検知自体はmain.js側の
+      // 独立タイマー（startStreamStartNotificationWatcher）に切り離したため必須ではないが、
+      // UI全体の一貫性のため無効化しておく。
+      backgroundThrottling: false,
     },
   });
 
@@ -1417,6 +1504,10 @@ function createStreamCheckWindow() {
     parent: mainWindow,
     show: false,
     frame: false,
+    // frame:falseだとWindows 11のDWMが角丸クリップを窓の外周へ直接適用し、右端に張り付いた
+    // スクロールバー等が見切れる（2026-08-17報告）。このウィンドウは自作ヘッダーのみで角丸演出を
+    // 意図していないため、DWMの自動角丸を無効化する。
+    roundedCorners: false,
     backgroundColor: '#1a1a1e',
     webPreferences: {
       preload: path.join(__dirname, 'renderer', 'stream-check-window', 'stream-check-window-preload.js'),
@@ -1502,6 +1593,109 @@ function createStreamCheckWindow() {
   return streamCheckWindow;
 }
 
+/**
+ * チャット統合の設定ウィンドウ（2026-08-09新設、元依頼一覧「チャット統合設定の設置場所」相談への
+ * 回答: 配信一覧(createStreamCheckWindow)と同じ独立BrowserWindow方式を流用）。
+ * ネットワーク通信は一切行わない（electron-storeの読み書きのみ）ため、createStreamCheckWindow()に
+ * 比べて内容は薄い。中身は「遡り中は自動更新を止める」トグルと「常時検知ワード」一覧の管理のみ。
+ * 既に開いている場合は多重生成せず既存ウィンドウをフォーカスするだけ（createStreamCheckWindowと同じ）。
+ */
+function createChatSettingsWindow() {
+  if (chatSettingsWindow && !chatSettingsWindow.isDestroyed()) {
+    chatSettingsWindow.focus();
+    return chatSettingsWindow;
+  }
+
+  const savedBounds = store.get('chatSettingsWindowBounds');
+  let initialBounds = { width: 380, height: 480 };
+  if (
+    savedBounds &&
+    Number.isFinite(savedBounds.x) &&
+    Number.isFinite(savedBounds.y) &&
+    Number.isFinite(savedBounds.width) &&
+    Number.isFinite(savedBounds.height)
+  ) {
+    const fitsAnyDisplay = screen.getAllDisplays().some((d) => {
+      const wa = d.workArea;
+      return (
+        savedBounds.x < wa.x + wa.width &&
+        savedBounds.x + savedBounds.width > wa.x &&
+        savedBounds.y < wa.y + wa.height &&
+        savedBounds.y + savedBounds.height > wa.y
+      );
+    });
+    if (fitsAnyDisplay) initialBounds = savedBounds;
+  }
+
+  chatSettingsWindow = new BrowserWindow({
+    ...initialBounds,
+    minWidth: 320,
+    minHeight: 360,
+    title: 'チャット統合の設定',
+    parent: mainWindow,
+    show: false,
+    frame: false,
+    backgroundColor: '#1a1a1e',
+    webPreferences: {
+      preload: path.join(__dirname, 'renderer', 'chat-settings-window', 'chat-settings-window-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  chatSettingsWindow.setMenuBarVisibility(false);
+  chatSettingsWindow.loadFile(path.join(__dirname, 'renderer', 'chat-settings-window', 'index.html'));
+
+  bringWindowToFrontOnFocus(chatSettingsWindow);
+
+  chatSettingsWindow.once('ready-to-show', () => {
+    if (chatSettingsWindow && !chatSettingsWindow.isDestroyed()) chatSettingsWindow.show();
+  });
+
+  chatSettingsWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type !== 'keyDown') return;
+    if (input.key === 'Escape') {
+      if (chatSettingsWindow && !chatSettingsWindow.isDestroyed()) chatSettingsWindow.close();
+      return;
+    }
+    const isDevToolsShortcut =
+      input.key === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i'));
+    if (isDevToolsShortcut && chatSettingsWindow && !chatSettingsWindow.isDestroyed()) {
+      chatSettingsWindow.webContents.toggleDevTools();
+    }
+  });
+
+  let boundsSaveTimer = null;
+  const scheduleSaveChatSettingsBounds = () => {
+    if (!chatSettingsWindow || chatSettingsWindow.isDestroyed()) return;
+    clearTimeout(boundsSaveTimer);
+    boundsSaveTimer = setTimeout(() => {
+      if (chatSettingsWindow && !chatSettingsWindow.isDestroyed()) {
+        store.set('chatSettingsWindowBounds', chatSettingsWindow.getBounds());
+      }
+    }, 300);
+  };
+  chatSettingsWindow.on('resize', scheduleSaveChatSettingsBounds);
+  chatSettingsWindow.on('move', scheduleSaveChatSettingsBounds);
+  chatSettingsWindow.on('close', () => {
+    clearTimeout(boundsSaveTimer);
+    if (chatSettingsWindow && !chatSettingsWindow.isDestroyed()) {
+      store.set('chatSettingsWindowBounds', chatSettingsWindow.getBounds());
+    }
+    // createStreamCheckWindowと同じ理由（L1496〜参照）で、閉じる直前にmainWindowへフォーカスを戻す。
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.focus();
+    }
+  });
+
+  chatSettingsWindow.on('closed', () => {
+    chatSettingsWindow = null;
+  });
+
+  return chatSettingsWindow;
+}
+
 /** 「バージョン」メニュー右上の赤丸バッジを出すべきか。renderer側に渡す状態にも使う。 */
 function hasUpdateBadge() {
   return updaterState.status === 'available' || updaterState.status === 'downloaded';
@@ -1563,15 +1757,40 @@ function ensureYoutubeEmbedServer() {
     const videoId = u.searchParams.get('video') || '';
     // iframe（youtube.com、別ドキュメント）はタイルのドラッグ移動・端リサイズ検知
     // （tileInteractionPreload.jsがこのラッパーページのwindowに仕込むmousedown/mousemove）が
-    // 届かない。そのため映像を100%いっぱいにはせず、周囲に20pxの縁を残しておく。
-    // 外側10px（tileInteractionPreload.jsのEDGE_PX）はリサイズ、残り10pxは移動のドラッグ開始点になる
-    // （ドラッグ中にポインタがiframe上に入っても追従できるよう、tileInteractionPreload.js側で
-    // ドラッグ中だけiframeのpointer-eventsを無効化している）。
+    // 届かない。そのため映像を100%いっぱいにはせず、周囲に縁を残しておく。
+    // 2026-08-09変更（実機報告対応、2回目）: 「縁が太い」「リサイズ判定をもっと外側だけにしてほしい」
+    // との追加報告を受け、20px→14px→10pxへ再縮小。sendEdgeConfig()でYouTubeタイルにのみ
+    // edgePx:YOUTUBE_TILE_EDGE_PX(6px)を送るようにしたため、外側6pxがリサイズ、残り4pxが
+    // 移動のドラッグ開始点になる（ドラッグ中にポインタがiframe上に入っても追従できるよう、
+    // tileInteractionPreload.js側でドラッグ中だけiframeのpointer-eventsを無効化している）。
+    // 2026-08-09追加（実機報告対応）: この縁でドラッグを開始すると、Chromiumの既定のテキスト選択/
+    // ネイティブドラッグ操作が同時に発生し、タイル全体が青くハイライトされたように見える不具合が
+    // あった。CSS(user-select:none等)だけでは実機で解消しきれなかったため、sendEdgeConfig()で
+    // YouTubeタイルにのみalwaysPreventDefault:trueを送り、tileInteractionPreload.js側で
+    // 移動ゾーンのmousedownでもpreventDefaultするよう変更した（詳細は同ファイルのコメント参照。
+    // このラッパーの縁には保護すべきクリック可能要素が無いため安全）。html/body/frame/iframe
+    // 全体のuser-select:none・-webkit-user-drag:noneは保険として残す。
     // id="player" + enablejsapi=1 は、音量調整（applyChannelVolume）がIFrame Player APIの
     // postMessageコマンドでこのiframeを操作するために必要（<video>要素はクロスオリジンで直接触れないため）。
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;}.frame{position:absolute;inset:0;box-sizing:border-box;border:20px solid #141416;}iframe{width:100%;height:100%;border:0;display:block;}</style></head><body><div class="frame"><iframe id="player" src="https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(`http://127.0.0.1:${YOUTUBE_EMBED_SERVER_PORT}`)}" allow="autoplay; encrypted-media" allowfullscreen></iframe></div></body></html>`;
+    // 2026-08-09追加（実機報告対応、「メタ情報の縁とドラッグ可能な縁が二重になっている」）:
+    // このラッパーの縁(.frame)は本来ドラッグ検知専用の透明な当たり判定でよいが、視認性のために
+    // #141416の可視ボーダーとして描画していた。下辺だけは、edgeConfigFor()でstream側のbottomを
+    // 常時falseにしてtile-info-bar（renderer.js側の下端26px帯）に一本化済みなのに、この可視ボーダー
+    // だけが「もう1本の縁」として直上に残ってしまい、tile-info-barの帯と隣接して二重線に見える
+    // 原因になっていた。border-bottomのみ0にして映像をtile-info-barの真上まで届かせ、下端の
+    // 縁（見た目・ドラッグ判定とも）をtile-info-bar側だけに統一する（上・左・右は従来通り、
+    // それぞれの辺のリサイズ検知用の可視ボーダーとして残す）。
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;user-select:none;-webkit-user-select:none;}.frame{position:absolute;inset:0;box-sizing:border-box;border:10px solid #141416;border-bottom:0;-webkit-user-drag:none;}iframe{width:100%;height:100%;border:0;display:block;-webkit-user-drag:none;}</style></head><body><div class="frame"><iframe id="player" src="https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&enablejsapi=1&origin=${encodeURIComponent(`http://127.0.0.1:${YOUTUBE_EMBED_SERVER_PORT}`)}" allow="autoplay; encrypted-media" allowfullscreen></iframe></div></body></html>`;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(html);
+  });
+  // 2026-08-09追加（実機報告対応）: requestSingleInstanceLock()導入で二重起動によるポート競合は
+  // 解消したが、それでも万一ポートが埋まっていた場合（他プロセスが占有している等）に備え、
+  // 未処理の例外でアプリごとクラッシュダイアログを出すのではなく、静かに諦めるだけにしておく
+  // （このサーバーが起動できなくてもYouTubeタイル追加自体は動画ID解決までは進むため、致命ではない）。
+  server.on('error', (err) => {
+    console.error('[youtube-embed-server] listen failed:', err);
+    youtubeEmbedServerStarted = false;
   });
   server.listen(YOUTUBE_EMBED_SERVER_PORT, '127.0.0.1');
 }
@@ -1829,6 +2048,13 @@ function removeChannel(channelName) {
   scheduleWebContentsDestroy(entry.chatView.webContents);
   streamViews.delete(channelName);
   notifyRenderer('tile:bar-remove', channelName);
+  // 削除したチャンネルがアクティブタイル情報帯（activeInfoBarView）の対象だった場合は、
+  // 存在しないチャンネルを表示し続けないよう非表示にしてクリアする。
+  if (channelName === activeTileChannel) {
+    activeTileChannel = null;
+    hideActiveInfoBarView();
+    notifyRenderer('active-info-bar:active-channel-changed', null);
+  }
 
   const channels = new Set(store.get('channels'));
   channels.delete(channelName);
@@ -1839,17 +2065,10 @@ function removeChannel(channelName) {
   delete layouts[channelName];
   store.set('tileLayouts', layouts);
 
-  const chatHidden = store.get('chatHidden');
-  delete chatHidden[channelName];
-  store.set('chatHidden', chatHidden);
-
-  const chatIntegrationHidden = store.get('chatIntegrationHidden');
-  delete chatIntegrationHidden[channelName];
-  store.set('chatIntegrationHidden', chatIntegrationHidden);
-
-  const volumes = store.get('channelVolumes');
-  delete volumes[channelName];
-  store.set('channelVolumes', volumes);
+  // chatHidden/chatIntegrationHidden/channelVolumesは、チャンネルを削除しても
+  // 「一度でも設定した内容」として恒久的に保持する（項目24: 削除・再起動後も記憶する仕様のため、
+  // ここでは意図的にstoreから消さない。再度同じチャンネルを追加した際、addChannel/dom-ready側の
+  // 既存読み込みロジックがそのまま前回設定を復元する）。
 
   const autoAddedChannels = store.get('autoAddedChannels');
   if (channelName in autoAddedChannels) {
@@ -2338,7 +2557,8 @@ function setChannelVolume(channelName, volume) {
   applyChannelVolume(channelName);
 
   // 操作対象が現在ザッピング中のタイルなら、「ザッピングタイル」自体の音量としても保存しておく
-  // （このchannelNameは次の切替でremoveChannelされ、channelVolumes側の値は消える想定のため）。
+  // （ザッピングは切替のたびに表示チャンネル名が変わるため、個別チャンネルの音量とは別に
+  // 「ザッピングタイル」という実体に対する音量も保持しておく必要がある）。
   if (channelName === currentZappingChannel) {
     store.set('zappingVolume', v);
   }
@@ -2355,6 +2575,22 @@ function setChannelVolume(channelName, volume) {
  * ドラッグ／リサイズ終了時（chatSuppressed=false に戻った時）に元の並びへ復帰する。
  */
 /** 比率(rect)から実ピクセルの bounds を計算し、指定チャンネルの BrowserView に即時反映する（永続化はしない） */
+/**
+ * タイル情報帯の矩形をrendererへ通知する。チャンネルが現在アクティブ（activeTileChannel）な場合は、
+ * 併せてアクティブタイル情報帯BrowserView（activeInfoBarView）のbounds（＝表示位置）もこの矩形へ
+ * 追従させる（同じタイミングで両方更新しないと、ドラッグ/リサイズ中に位置がずれて見える）。
+ */
+function pushTileBarBounds(channelName, x, y, width, height) {
+  notifyRenderer('tile:bar-bounds', { channel: channelName, x, y, width, height });
+  if (channelName === activeTileChannel && activeInfoBarView) {
+    try {
+      activeInfoBarView.setBounds({ x, y, width, height });
+    } catch (_) {
+      /* ビュー破棄後などは無視 */
+    }
+  }
+}
+
 function applyTileBoundsFromRect(channelName, rect) {
   const entry = streamViews.get(channelName);
   if (!entry || !mainWindow) return;
@@ -2367,8 +2603,10 @@ function applyTileBoundsFromRect(channelName, rect) {
   const outerH = Math.max(MIN_TILE_HEIGHT, Math.round(rect.h * usableHeight));
   const outerX = Math.round(rect.x * width);
   const outerY = HEADER_HEIGHT + Math.round(rect.y * usableHeight);
-  // streamView（配信映像）の高さだけを情報帯の分縮める。chatViewの高さ・幅は変更しない。
-  const streamH = Math.max(40, outerH - TILE_INFO_BAR_HEIGHT);
+  // streamView（配信映像）の高さだけを情報帯の分縮める。依頼#31: 情報帯自体がOFFの場合は
+  // 縮めず全高を配信映像に使わせる（edgeConfigForのbottom判定もこのフラグに連動させる必要がある）。
+  const infoBarHeight = store.get('tileInfoBarEnabled') ? TILE_INFO_BAR_HEIGHT : 0;
+  const streamH = Math.max(40, outerH - infoBarHeight);
 
   const permanentlyHidden = isChatHidden(channelName);
 
@@ -2384,26 +2622,14 @@ function applyTileBoundsFromRect(channelName, rect) {
       }
     }
     entry.streamView.setBounds({ x: outerX, y: outerY, width: outerW, height: streamH });
-    notifyRenderer('tile:bar-bounds', {
-      channel: channelName,
-      x: outerX,
-      y: outerY + streamH,
-      width: outerW,
-      height: TILE_INFO_BAR_HEIGHT,
-    });
+    pushTileBarBounds(channelName, outerX, outerY + streamH, outerW, infoBarHeight);
     return;
   }
 
   const chatW = Math.min(280, Math.floor(outerW * 0.28));
   const streamW = Math.max(40, outerW - chatW);
   entry.streamView.setBounds({ x: outerX, y: outerY, width: streamW, height: streamH });
-  notifyRenderer('tile:bar-bounds', {
-    channel: channelName,
-    x: outerX,
-    y: outerY + streamH,
-    width: streamW,
-    height: TILE_INFO_BAR_HEIGHT,
-  });
+  pushTileBarBounds(channelName, outerX, outerY + streamH, streamW, infoBarHeight);
 
   if (entry.chatSuppressed) {
     // ドラッグ/リサイズ中の負荷軽減：チャット欄の再配置はスキップし、いったん画面から外す
@@ -2501,6 +2727,102 @@ function commitTileLayout(channelName, rect) {
   relayoutStreamViews();
 }
 
+// ---- アクティブタイルのメタ情報帯（2026-08-09新設） ----
+// 元依頼: 「どの状況、どのサイトの配信でもメタ情報が他の配信画面に隠れてしまうので、配信画面が
+// アクティブの時はメタ情報も前面に出すように変更」への対応。
+// タイル情報帯（#tile-info-bars、ホストウィンドウ自身のHTML）はElectronの仕様上どのBrowserView
+// よりも常に背面になるため、通常のタイル情報帯だけではアクティブなタイルの映像が他タイルより
+// 前面に来ても、そのメタ情報自体は前面化できない。
+// 検討の結果、「全タイルのメタ情報を常に最前面にする」（重なり配置での占有率がかえって
+// 上がってしまう懸念をユーザーからも指摘された）ではなく、「直前に操作した“アクティブな”
+// タイル1枚分のメタ情報だけを、そのタイルの映像と同様に前面化する」方式を採用した。
+// bringTileToFront()（ドラッグ/リサイズ開始のたびに呼ばれる、既存の「アクティブ化」相当の
+// タイミング）にフックし、対応するchannelのメタ情報だけをこの専用BrowserView
+// （activeInfoBarView）で描画・最前面化する。他の（非アクティブな）タイルの情報帯は
+// 従来通りホストHTML側のまま（挙動・見た目は変更なし）。
+let activeInfoBarView = null;
+let activeTileChannel = null;
+
+/** アクティブタイル情報帯用のBrowserViewを（まだ無ければ）生成する。中身はネットワーク非依存の軽量ページ。 */
+function ensureActiveInfoBarView() {
+  if (activeInfoBarView && !activeInfoBarView.webContents.isDestroyed()) return activeInfoBarView;
+  activeInfoBarView = new BrowserView({
+    webPreferences: {
+      preload: path.join(__dirname, 'renderer', 'active-info-bar', 'active-info-bar-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    activeInfoBarView.setBackgroundColor('#00000000');
+  } catch (_) {
+    /* 古いElectronバージョン等でAPIが無い場合は無視（背景が不透明になるだけで致命ではない） */
+  }
+  // 2026-08-09追加（独立レビュー指摘対応）: 生成直後にupdateActiveInfoBar()が送る
+  // 'active-info-bar:set-channel' は、このページ（active-info-bar.js）の読み込み・
+  // スクリプト実行がまだ完了していないタイミングでは、ipcRenderer.send相当のfire-and-forgetの
+  // 性質上、例外を投げずに黙って届かない（try/catchでは検知できない）。その結果、
+  // active-info-bar.js側のcurrentChannelがnullのまま残り、以降のonContent（内容の反映）が
+  // 「古いデータの取りこぼし対策」フィルタ（payload.name !== currentChannel）に永久に弾かれ、
+  // バーが空白のまま固着する不具合があった。ページの読み込み完了(did-finish-load)を待って、
+  // その時点でまだアクティブなチャンネルが設定されていれば送り直すことで解消する。
+  activeInfoBarView.webContents.once('did-finish-load', () => {
+    if (activeTileChannel && activeInfoBarView && !activeInfoBarView.webContents.isDestroyed()) {
+      try {
+        activeInfoBarView.webContents.send('active-info-bar:set-channel', activeTileChannel);
+      } catch (_) {
+        /* 破棄後などは無視 */
+      }
+    }
+  });
+  activeInfoBarView.webContents.loadFile(path.join(__dirname, 'renderer', 'active-info-bar', 'index.html'));
+  return activeInfoBarView;
+}
+
+/**
+ * 指定チャンネルを「アクティブ」として、そのタイルのメタ情報帯を最前面化する。
+ * bringTileToFront()（ドラッグ/リサイズ開始時）から呼ばれる。overlayパネル表示中
+ * （contentViewsHiddenForOverlay）は他の配信タイル同様に表示しない
+ * （hideContentViewsForOverlay/showContentViewsForOverlay参照）。
+ */
+function updateActiveInfoBar(channelName) {
+  activeTileChannel = channelName;
+  // mainWindow側のrenderer.js（applyStreamMetaToTileBars）へ、どのチャンネルが今アクティブかを
+  // 伝える。renderer.js側はこれを使って、毎秒計算済みの表示内容(タイトル/カテゴリ/統計)のうち
+  // アクティブなチャンネルの分だけをactive-info-bar:push-content経由でこちらへ送り返す
+  // （fetchAllStreamMeta()を二重に叩かないための設計、詳細はrenderer.js参照）。
+  notifyRenderer('active-info-bar:active-channel-changed', channelName);
+  if (!mainWindow) return;
+  if (contentViewsHiddenForOverlay) return; // オーバーレイを閉じた時にshowContentViewsForOverlay側で復元する
+  const entry = streamViews.get(channelName);
+  if (!entry) return;
+  const view = ensureActiveInfoBarView();
+  try {
+    if (!isViewAttached(view)) mainWindow.addBrowserView(view);
+    if (typeof mainWindow.setTopBrowserView === 'function') mainWindow.setTopBrowserView(view);
+  } catch (_) {
+    /* 古いElectronバージョン等でAPIが無い場合は無視 */
+  }
+  try {
+    view.webContents.send('active-info-bar:set-channel', channelName);
+  } catch (_) {
+    /* ページ読み込み未完了時などは無視（次のtile:bar-boundsで結局bounds/内容が追従する） */
+  }
+}
+
+/** アクティブタイル情報帯を非表示にする（対象チャンネルが削除された時・オーバーレイ表示時に呼ぶ）。 */
+function hideActiveInfoBarView() {
+  if (!mainWindow || !activeInfoBarView) return;
+  if (isViewAttached(activeInfoBarView)) {
+    try {
+      mainWindow.removeBrowserView(activeInfoBarView);
+    } catch (_) {
+      /* 既に外れている場合は無視 */
+    }
+  }
+}
+
 /** ドラッグ開始時などにタイルを最前面に持ってくる（重なり配置を許容するウィンドウマネージャー方式のため） */
 function bringTileToFront(channelName) {
   const entry = streamViews.get(channelName);
@@ -2513,6 +2835,7 @@ function bringTileToFront(channelName) {
   } catch (_) {
     /* 古いElectronバージョン等でAPIが無い場合は無視 */
   }
+  updateActiveInfoBar(channelName);
 }
 
 /**
@@ -2526,23 +2849,52 @@ function bringTileToFront(channelName) {
  */
 let interactionSession = null; // { channel, type, dir, startCursor, startRect, currentRect }
 
-/** 配信側/チャット側それぞれで有効な「リサイズ対象の辺」を返す。チャットはタイル内部の右側固定表示のため左端は対象外。 */
+/**
+ * 配信側/チャット側それぞれで有効な「リサイズ対象の辺」を返す。チャットはタイル内部の右側固定表示のため左端は対象外。
+ * 配信側(stream)のbottomは意図的にfalse: streamViewはtile-info-bar(TILE_INFO_BAR_HEIGHT分、
+ * applyTileBoundsFromRect参照)の高さだけ下端を縮めており、そのすぐ下にtile-info-bar自身の
+ * 下端リサイズ判定(renderer.js側、TILE_INFO_BAR_RESIZE_EDGE_PX)が別途存在する。両方を有効に
+ * すると同じ「タイル下端」に対して2つの独立したリサイズ判定が隣接して重なり、カーソルが
+ * 意図せず↕(ns-resize)になったり、二重の縁があるように見える不具合の原因になっていたため、
+ * ここでは無効化してtile-info-bar側に一本化する（チャット非表示時もtile-info-barは表示され続ける
+ * ため、bottom方向のリサイズ操作自体は失われない）。
+ * 依頼#31: tileInfoBarEnabledがOFFの場合はtile-info-bar自体が存在しない（高さ0）ため、
+ * この一本化の前提が崩れる。OFF時はstream側のbottomをtrueに戻し、下端リサイズ操作を失わないようにする。
+ */
 function edgeConfigFor(channelName, target) {
   if (target === 'chat') {
     return { top: true, bottom: true, left: false, right: true };
   }
-  return { top: true, bottom: true, left: true, right: isChatHidden(channelName) };
+  const infoBarEnabled = store.get('tileInfoBarEnabled');
+  return { top: true, bottom: !infoBarEnabled, left: true, right: isChatHidden(channelName) };
 }
+
+// 2026-08-09追加（実機報告対応）: YouTubeの自前ラッパー（ensureYoutubeEmbedServer参照）は
+// 縁でのドラッグ開始時にChromiumの既定のテキスト選択/ネイティブドラッグが同時に発生し、
+// タイル全体が選択されたように見える不具合があった。CSS(user-select:none等)だけでは解消しきれず、
+// 実機で再現が続いたため、YouTubeタイルに限り「移動ゾーンのmousedownでもpreventDefaultする」
+// （tileInteractionPreload.js側のalwaysPreventDefault）に切り替える。ラッパーの縁部分には
+// 元々Twitchのアバター画像等のような保護すべきクリック可能要素が無い（実際のYouTube UIは
+// クロスオリジンiframeの中にあり、この縁はもっぱらこちら側のドラッグ検知専用のため）、
+// Twitch/Kickと違って安全に常時preventDefaultできる。
+// また「リサイズ判定をもっと外側だけにしてほしい・縁全体をもっと狭くしてほしい」という
+// 実機報告を受け、YouTubeタイルのみリサイズ判定の縁幅(EDGE_PX)を10→6pxに縮小する
+// （ラッパー側の縁自体も14px→10pxに縮小、下記ensureYoutubeEmbedServer参照。ただし下辺のみ
+// 2026-08-09の追加対応でtile-info-barと二重に見えないよう可視ボーダーを0にしており、
+// 現在は上・左・右の3辺だけが10pxの可視ボーダー、下辺はtile-info-bar側に一本化されている）。
+const YOUTUBE_TILE_EDGE_PX = 6;
 
 /** プリロードへ「今どの辺が有効か」を送る（初回・チャット非表示切替時・ページ再読み込み後に呼ぶ） */
 function sendEdgeConfig(channelName) {
   const entry = streamViews.get(channelName);
   if (!entry) return;
+  const isYoutube = entry.platform === 'youtube';
   try {
     entry.streamView.webContents.send('tile-edge-config', {
       channel: channelName,
       target: 'stream',
       edges: edgeConfigFor(channelName, 'stream'),
+      ...(isYoutube ? { edgePx: YOUTUBE_TILE_EDGE_PX, alwaysPreventDefault: true } : {}),
     });
   } catch (_) {
     /* ビュー破棄後などは無視 */
@@ -3124,6 +3476,55 @@ function extractBalancedJsonAfter(html, marker) {
  * ヒューリスティックにフォールバックする。
  */
 /**
+ * ytInitialData（watchページに埋め込まれる、ytInitialPlayerResponseとは別のJSON）から
+ * チャンネルアバターURLを探す。まず既知のパス（動画説明欄下のチャンネル情報ブロック）を試し、
+ * 見つからない場合は`videoOwnerRenderer.thumbnail.thumbnails`を持つノードを再帰的に探す
+ * フォールバックへ切り替える（YouTube側のページ構造変化に対する耐性のため）。
+ * どちらも失敗した場合はnullを返すだけで例外は投げない（装飾情報のため、アバター取得の
+ * 失敗が配信メタ情報自体の取得を妨げてはならない）。
+ */
+function extractYoutubeChannelAvatarFromInitialData(initialData) {
+  const pickLastThumbnailUrl = (thumbnail) => {
+    const thumbs = thumbnail && Array.isArray(thumbnail.thumbnails) ? thumbnail.thumbnails : null;
+    if (!thumbs || !thumbs.length) return null;
+    const last = thumbs[thumbs.length - 1];
+    return (last && last.url) || null;
+  };
+  try {
+    const contents = initialData?.contents?.twoColumnWatchNextResults?.results?.results?.contents;
+    if (Array.isArray(contents)) {
+      for (const item of contents) {
+        const owner = item?.videoSecondaryInfoRenderer?.owner?.videoOwnerRenderer;
+        const url = owner && pickLastThumbnailUrl(owner.thumbnail);
+        if (url) return url;
+      }
+    }
+  } catch (_) {
+    /* 既知パスの構造が変わっていた場合は下の再帰探索へ */
+  }
+  try {
+    const stack = [initialData];
+    let steps = 0;
+    while (stack.length && steps < 5000) {
+      steps++;
+      const node = stack.pop();
+      if (!node || typeof node !== 'object') continue;
+      const owner = node.videoOwnerRenderer;
+      if (owner) {
+        const url = pickLastThumbnailUrl(owner.thumbnail);
+        if (url) return url;
+      }
+      for (const key in node) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) stack.push(node[key]);
+      }
+    }
+  } catch (_) {
+    /* 再帰探索の失敗もアバター取得の失敗として扱う（呼び出し元はnullを許容する設計） */
+  }
+  return null;
+}
+
+/**
  * 2026-08-08追加（要望⑧: YouTubeの配信メタ情報取得）: ハンドル/チャンネルIDから、現在配信中の
  * 動画ID・タイトル・カテゴリ・配信開始時刻をまとめて無料で解決する。
  * resolveYoutubeLiveVideoIdFree()が動画IDの特定に使っていたのと全く同じHTML取得・
@@ -3135,6 +3536,9 @@ function extractBalancedJsonAfter(html, marker) {
  * 旧来のページ全文検索フォールバック（ytInitialPlayerResponseの抽出自体に失敗した場合）では
  * タイトル・カテゴリ・開始時刻までは取れないため、その場合は空文字/nullのまま返す
  * （表示側は値が無い項目を単に出さない設計のため実害はない）。
+ * 2026-08-17追加（項目32 Phase2: 統合チャットのチャンネルアイコン表示）: 同じHTML文字列内に
+ * 埋め込まれているytInitialDataからチャンネルアバターURLも追加で抽出する。追加のHTTPリクエストは
+ * 発生しない。抽出に失敗してもavatarUrl:nullを返すだけで、動画ID等の主要な戻り値には影響しない。
  */
 async function fetchYoutubeLiveInfoFree(handleOrChannelId) {
   const input = String(handleOrChannelId || '').trim();
@@ -3142,6 +3546,14 @@ async function fetchYoutubeLiveInfoFree(handleOrChannelId) {
     ? `https://www.youtube.com/channel/${encodeURIComponent(input)}/live`
     : `https://www.youtube.com/${encodeURIComponent(input.startsWith('@') ? input : `@${input}`)}/live`;
   const html = await fetchHtml(liveUrl);
+
+  let avatarUrl = null;
+  try {
+    const initialData = extractBalancedJsonAfter(html, 'ytInitialData');
+    if (initialData) avatarUrl = extractYoutubeChannelAvatarFromInitialData(initialData);
+  } catch (_) {
+    /* アバターは装飾情報なので、取得失敗しても配信メタ情報自体の取得は継続する */
+  }
 
   const playerResponse = extractBalancedJsonAfter(html, 'ytInitialPlayerResponse');
   if (playerResponse) {
@@ -3155,6 +3567,7 @@ async function fetchYoutubeLiveInfoFree(handleOrChannelId) {
           title: (playerResponse.videoDetails && playerResponse.videoDetails.title) || '',
           category: (microformat && microformat.category) || '',
           startedAt: liveBroadcastDetails.startTimestamp || null,
+          avatarUrl,
         };
       }
       // startTimestampはあるがendTimestampが無い＝配信予定（まだ開始前）である可能性が高い
@@ -3175,9 +3588,9 @@ async function fetchYoutubeLiveInfoFree(handleOrChannelId) {
     );
   }
   const canonicalMatch = html.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})"/);
-  if (canonicalMatch) return { videoId: canonicalMatch[1], title: '', category: '', startedAt: null };
+  if (canonicalMatch) return { videoId: canonicalMatch[1], title: '', category: '', startedAt: null, avatarUrl };
   const videoIdMatch = html.match(/"videoId":"([\w-]{11})"/);
-  if (videoIdMatch) return { videoId: videoIdMatch[1], title: '', category: '', startedAt: null };
+  if (videoIdMatch) return { videoId: videoIdMatch[1], title: '', category: '', startedAt: null, avatarUrl };
   throw new Error('配信中の動画IDを特定できませんでした（YouTube側のページ構造が変わった可能性があります）');
 }
 
@@ -3799,8 +4212,23 @@ async function fetchTwitchStreamMeta(channelNames) {
         // Date.now()との差分から毎秒計算する（この値自体は60秒間隔でしか更新しないが、
         // 開始時刻というほぼ不変の値なので実用上問題ない）。
         startedAt: s.started_at || null,
+        avatarUrl: null,
+        userId: String(s.user_id || ''),
       };
     });
+  }
+  // 統合チャットのチャンネルアイコン表示（項目32）用。fetchFollowedLiveChannels()と同じく
+  // アバターは装飾情報のため、取得失敗してもavatarUrl:nullのままstream meta自体は返す。
+  try {
+    const userIds = Object.values(result).map((m) => m.userId).filter(Boolean);
+    if (userIds.length) {
+      const avatars = await fetchTwitchAvatarUrls(userIds, clientId, token);
+      Object.values(result).forEach((m) => {
+        m.avatarUrl = avatars.get(m.userId) || null;
+      });
+    }
+  } catch (_) {
+    /* アバター取得の失敗はstream meta自体の返却には影響させない */
   }
   return result;
 }
@@ -3833,6 +4261,9 @@ async function fetchKickStreamMeta(channelName) {
             // 参考にした非公式フィールド名（resolveKickChatroomId等と同じく、Kick側の仕様変更で
             // 効かなくなる可能性がある）。無い場合はnullのまま返し、呼び出し元で経過時間非表示にする。
             startedAt: live.created_at || null,
+            // 項目32（統合チャットのチャンネルアイコン表示）用。r.json.user.profile_picは
+            // 同一レスポンス内に含まれるため追加リクエスト不要。無い場合はnullのまま返す。
+            avatarUrl: (r.json.user && r.json.user.profile_pic) || null,
           };
         })
         .catch(function (e) { return { ok: false, error: String(e) }; });
@@ -3843,6 +4274,7 @@ async function fetchKickStreamMeta(channelName) {
         gameName: result.gameName,
         viewerCount: result.viewerCount,
         startedAt: result.startedAt,
+        avatarUrl: result.avatarUrl,
       };
     }
     return null;
@@ -3862,17 +4294,24 @@ async function fetchKickStreamMeta(channelName) {
  * - Twitch: getHelixAppToken()（Client ID/Secretのみ、アカウント連携不要）が使えない場合は
  *   Twitch分のみ静かに空扱いにする（Kick/YouTubeには影響させない）
  * - Kick: BrowserView生成コストが高いため同時実行数を絞る（mapWithConcurrency）
- * - YouTube: Helixのような視聴者数・カテゴリを無料で返す公式APIが無いため今回のスコープ外
- *   （タイトルすら取得しない。チップ側は「対応チェック中」ではなく「非対応」表示にする）
+ * - YouTube（2026-08-09追加）: Helixのような視聴者数を無料で返す公式APIが無いため視聴者数のみ
+ *   引き続きスコープ外（result[channel].viewerCountはundefinedのまま。呼び出し側は値の有無で
+ *   表示を出し分ける）。タイトル・カテゴリ・配信開始時刻(経過時間表示用)は、配信一覧ウィンドウで
+ *   既に使っているfetchYoutubeLiveInfoFreeWithRetry（ytInitialPlayerResponseの無料HTML
+ *   スクレイプ、追加リクエスト無し）をそのまま流用して取得する。youtubeChannelId未設定
+ *   （動画URL直貼りで追加したタイル）の場合は解決手段が無いため取得自体をスキップする。
  * 個別チャンネルの取得失敗はチャンネル単位で握りつぶし、該当キーを省略する
  * （呼び出し元でバッジ非表示にフォールバックする設計）。
  */
 async function fetchAllStreamMeta() {
   const twitchChannels = [];
   const kickChannels = [];
+  const youtubeChannels = []; // { channel, youtubeChannelId }
   streamViews.forEach((entry, channel) => {
     if (entry.platform === 'kick') kickChannels.push(channel);
-    else if (entry.platform !== 'youtube') twitchChannels.push(channel); // platform未設定は従来通りtwitch扱い
+    else if (entry.platform === 'youtube') {
+      if (entry.youtubeChannelId) youtubeChannels.push({ channel, youtubeChannelId: entry.youtubeChannelId });
+    } else twitchChannels.push(channel); // platform未設定は従来通りtwitch扱い
   });
 
   const result = {};
@@ -3895,55 +4334,141 @@ async function fetchAllStreamMeta() {
     });
   }
 
+  if (youtubeChannels.length) {
+    // retries=0: 60秒間隔の定期ポーリングで呼ばれるため、1回失敗しても次回のポーリングで
+    // 再取得される。ここでリトライを重ねるとYouTube側へのリクエスト頻度が上がってしまう。
+    await mapWithConcurrency(youtubeChannels, 3, async ({ channel, youtubeChannelId }) => {
+      try {
+        const info = await fetchYoutubeLiveInfoFreeWithRetry(youtubeChannelId, 0);
+        result[channel] = {
+          title: info.title || '',
+          gameName: info.category || '',
+          startedAt: info.startedAt || null,
+          platform: 'youtube',
+          // viewerCountは意図的に付けない（呼び出し側でinfo.viewerCount === undefinedを
+          // 「YouTubeのため非対応」の判定に使う）。
+          // 項目32 Phase2: fetchYoutubeLiveInfoFreeがytInitialDataから抽出したアバターURL。
+          // 抽出失敗時はnull（呼び出し元・renderer.js側は頭文字アイコンへ自然にフォールバックする）。
+          avatarUrl: info.avatarUrl || null,
+        };
+      } catch (err) {
+        // 配信していない・ページ構造変化等。当該チャンネルのキーを省略し呼び出し元でバッジ非表示にする。
+      }
+    });
+  }
+
   return result;
 }
 
 /**
  * #6対応: 登録チャンネルの配信開始（オフライン→ライブへの遷移）を検知し、通知タブ用の
- * 履歴に積む。fetchAllStreamMeta()の戻り値（現在ライブなチャンネルのみキーとして存在。
- * YouTubeは対象外＝上のfetchAllStreamMetaのコメント参照）を元に、前回ポーリング時点の
- * 生存状態と比較する。
- * 「一度でも観測したか」をnotificationsKnownLiveMapのキーの有無で判定することで、
- * ①アプリ起動直後に既にライブだったチャンネル、②ユーザーが今まさにライブなチャンネルを
- * 手動追加した直後、のどちらも「今まさに配信開始した」とは扱わない
- * （初めて観測した回は記録のみで通知は出さない）。
- * channels:get-stream-meta のハンドラから、レスポンスを返す前に呼ぶ。
+ * 履歴に積む処理の共通コア。プラットフォームごとに「今回チェックすべき全チャンネル
+ * （ライブ・オフライン問わず）」と「そのうち現在ライブなチャンネルの詳細」を用意して呼ぶ。
+ *
+ * 通知タブ刷新（2026-08-09、ユーザーからの追加要望で対象範囲をタイル基準→フォロー基準に変更）:
+ * 元々は「メイン画面にタイル追加済みのチャンネル」全プラットフォーム共通の1関数
+ * （recordStreamStartNotifications）だったが、ユーザーから「タイル追加しているだけでフォローは
+ * していないチャンネルは通知対象から外し、実際にTwitch/Kickでフォロー/チャンネル登録している
+ * チャンネルを対象にしたい」との要望を受け、Twitch/Kickはフォロー中チャンネル基準の検知
+ * （runTwitchFollowedNotificationCheck/runKickFollowedNotificationCheck）に切り替えた。
+ * YouTubeはフォロー一覧を取得するAPIが無いため、当初はタイル基準を維持していたが、
+ * 「タイル追加時点で既にライブと分かっているため通知の意味が薄い」という追加指摘を受け、
+ * タイル基準から独立した専用リスト（youtubeNotificationTargets、
+ * runYoutubeNotificationTargetsCheck、本関数末尾）に変更した。この共通コア自体は
+ * プラットフォーム非依存の汎用ロジックとして残し、3つの呼び出し元から使い回す。
+ *
+ * candidateKeysに「今回チェック対象の全チャンネル」を漏れなく渡すことが重要。
+ * オフラインなチャンネルもここに含めて毎回渡すことで、①アプリ起動直後・フォロー直後に
+ * 既にライブだったチャンネル、②まだ一度もオフラインを観測していないチャンネル、
+ * のどちらも「今まさに配信開始した」とは扱わない（初めて観測した回は記録のみで通知は
+ * 出さない）という既存方針を維持できる。
+ *
+ * missStreak（通知重複バグ修正、2026-08-09）: TwitchのHelix APIレート制限やKickのスクレイプ
+ * 失敗等で「実際はライブなのに1回だけliveNowから欠落する」ことがあり、それを即座に
+ * 「オフラインになった」と確定させると、次の正常な取得で「オフライン→ライブ」の誤検知
+ * （＝同じ配信の重複通知）につながる。OFFLINE_CONFIRM_MISS_STREAK回連続で欠落するまでは
+ * liveのまま扱う猶予を設けている。
+ *
+ * @param {string} platformPrefix notificationsKnownLiveMapのキー衝突防止用プレフィックス（'youtube'|'twitch'|'kick'）
+ * @param {Set<string>} candidateKeys 今回チェック対象の全キー（`${platformPrefix}:識別子.toLowerCase()`形式）
+ * @param {Map<string, {channel:string, platform:string, title:string}>} liveNow candidateKeysのうち現在ライブなものの詳細
  */
-function recordStreamStartNotifications(meta) {
-  const currentLiveChannels = new Set(Object.keys(meta));
-  const trackedChannels = new Set(streamViews.keys());
+function detectAndRecordNewlyLive(platformPrefix, candidateKeys, liveNow) {
   const newlyLive = [];
 
-  trackedChannels.forEach((channel) => {
-    const isLive = currentLiveChannels.has(channel);
-    const wasObserved = notificationsKnownLiveMap.has(channel);
-    if (wasObserved && !notificationsKnownLiveMap.get(channel) && isLive) {
-      newlyLive.push(channel);
+  candidateKeys.forEach((key) => {
+    const isLive = liveNow.has(key);
+    const prev = notificationsKnownLiveMap.get(key); // undefined | { live, missStreak }
+
+    if (isLive) {
+      if (prev && !prev.live) newlyLive.push(liveNow.get(key));
+      notificationsKnownLiveMap.set(key, { live: true, missStreak: 0 });
+    } else if (!prev) {
+      // 初回観測がまさに未ライブ。記録のみ。
+      notificationsKnownLiveMap.set(key, { live: false, missStreak: 0 });
+    } else if (prev.live) {
+      const missStreak = prev.missStreak + 1;
+      if (missStreak >= OFFLINE_CONFIRM_MISS_STREAK) {
+        notificationsKnownLiveMap.set(key, { live: false, missStreak: 0 });
+      } else {
+        notificationsKnownLiveMap.set(key, { live: true, missStreak });
+      }
+    } else {
+      // 既にoffline確定済み。そのまま。
+      notificationsKnownLiveMap.set(key, { live: false, missStreak: 0 });
     }
-    notificationsKnownLiveMap.set(channel, isLive);
   });
 
-  // 削除済みチャンネルのエントリはMapに残しても実害はないが、肥大化を避けるため掃除する。
-  Array.from(notificationsKnownLiveMap.keys()).forEach((channel) => {
-    if (!trackedChannels.has(channel)) notificationsKnownLiveMap.delete(channel);
+  // このプラットフォームで、今回の候補集合に含まれなくなったキー（フォロー解除・タイル削除等）は
+  // Mapに残しても実害はないが、肥大化を避けるため掃除する。
+  const prefix = `${platformPrefix}:`;
+  Array.from(notificationsKnownLiveMap.keys()).forEach((key) => {
+    if (key.startsWith(prefix) && !candidateKeys.has(key)) notificationsKnownLiveMap.delete(key);
   });
 
   if (!newlyLive.length) return;
 
   const list = store.get('streamStartNotifications');
-  newlyLive.forEach((channel) => {
-    const info = meta[channel] || {};
+  newlyLive.forEach((entry) => {
     list.push({
-      id: `${Date.now()}-${channel}-${Math.random().toString(36).slice(2, 8)}`,
-      channel,
-      platform: info.platform || 'twitch',
-      title: info.title || '',
+      id: `${Date.now()}-${entry.channel}-${Math.random().toString(36).slice(2, 8)}`,
+      channel: entry.channel,
+      platform: entry.platform,
+      title: entry.title || '',
       detectedAt: Date.now(),
     });
   });
-  // 直近100件のみ保持（無限に増え続けないように）
-  store.set('streamStartNotifications', list.slice(-100));
+  // 直近5件のみ保持（通知タブ刷新2026-08-09: 表示上限5件+古いものは自動削除の要望に合わせ100→5に変更）。
+  store.set('streamStartNotifications', list.slice(-5));
   notifyNotificationsStateChanged();
+}
+
+/**
+ * YouTube分の配信開始検知（通知タブ刷新2026-08-09、タイル基準から独立リスト基準に変更）。
+ * 「今まさにメイン画面にタイル追加されているチャンネルだけが対象」だと、追加した時点で
+ * 既にライブと分かっているため通知の意味がほぼ無い、というユーザー指摘を受け、タイル追加/削除の
+ * ライフサイクルから切り離した専用リスト（youtubeNotificationTargets、通知タブから手動で
+ * 登録・削除する）を対象にする。Twitch/KickのようなAPIベースのフォロー一覧取得手段が
+ * YouTubeには無いための代替策。
+ */
+async function runYoutubeNotificationTargetsCheck() {
+  const targets = getYoutubeNotificationTargets();
+  if (!targets.length) return;
+  const candidateKeys = new Set();
+  const liveNow = new Map();
+  await mapWithConcurrency(targets, UNIFIED_FEED_YOUTUBE_CONCURRENCY, async (t) => {
+    const key = `youtube:${t.channel.toLowerCase()}`;
+    candidateKeys.add(key);
+    try {
+      // retries=0: 60秒間隔の定期ポーリングで呼ばれるため、1回失敗しても次回のポーリングで
+      // 再取得される（fetchAllStreamMetaのYouTube分と同じ方針）。
+      const info = await fetchYoutubeLiveInfoFreeWithRetry(t.channel, 0);
+      liveNow.set(key, { channel: t.channel, platform: 'youtube', title: info.title || '' });
+    } catch (err) {
+      // 配信していない、またはハンドル解決失敗。候補としては維持するがliveNowには含めない。
+    }
+  });
+  detectAndRecordNewlyLive('youtube', candidateKeys, liveNow);
 }
 
 /** 通知タブの赤丸バッジを出すべきか（未読＝最後に開いた時刻より新しい通知がある）。 */
@@ -3957,6 +4482,9 @@ function getNotificationsState() {
   return {
     items: store.get('streamStartNotifications'),
     hasUnread: hasUnreadNotifications(),
+    // 通知タブ刷新（2026-08-09）: 通知タブ内のYouTube通知対象リスト管理UIが使う。
+    // 別IPC往復にせずここに含めることで、通知タブを開いた時点で一緒に取得できるようにしている。
+    youtubeTargets: getYoutubeNotificationTargets(),
   };
 }
 
@@ -3969,6 +4497,114 @@ function notifyNotificationsStateChanged() {
 function markNotificationsRead() {
   store.set('streamStartNotificationsLastReadAt', Date.now());
   notifyNotificationsStateChanged();
+}
+
+// ---- 配信開始通知ウォッチャー（通知タブ刷新2026-08-09、Drops自動追加/削除のsetIntervalパターンを踏襲） ----
+// mainWindowの最小化/非表示中もrenderer.js側のタイマーに影響されず配信開始を検知できるよう、
+// main.js常駐の独立タイマーとして持つ。既存のCHIP_META_INTERVAL_MS（renderer.js）と同じ60秒間隔。
+const STREAM_START_NOTIFICATION_INTERVAL_MS = 60 * 1000;
+let streamStartNotificationTimer = null;
+let streamStartNotificationCheckRunning = false; // 前回のfetchAllStreamMetaが終わる前に多重実行しないための簡易ロック
+
+async function runStreamStartNotificationCheck() {
+  if (streamStartNotificationCheckRunning) return;
+  streamStartNotificationCheckRunning = true;
+  try {
+    // YouTube分は通知対象リスト基準（通知タブ刷新2026-08-09。タイルの生存確認まで含む
+    // fetchAllStreamMeta()を全件叩く必要が無くなったため、対象リストの各チャンネルだけを
+    // 直接チェックするrunYoutubeNotificationTargetsCheckに置き換えた）。関数内部で個別チャンネル
+    // 分の失敗は握りつぶされているため、ここでは想定外のエラーのみ捕捉する。
+    try {
+      await runYoutubeNotificationTargetsCheck();
+    } catch (err) {
+      // 次回のポーリングで復旧を試みるため通知等は出さない。
+    }
+    // Twitch分はフォロー中チャンネル基準（通知タブ刷新2026-08-09）。関数内部でtry/catch済みのため、
+    // 未連携・トークン失効等でここまでthrowが伝播することはない。
+    await runTwitchFollowedNotificationCheck();
+  } finally {
+    streamStartNotificationCheckRunning = false;
+  }
+}
+
+/**
+ * Twitchのフォロー中チャンネルの配信開始検知（通知タブ刷新2026-08-09、ユーザー要望でタイル基準から
+ * フォロー基準に変更）。Twitchアカウント連携（Auto Tune-Inと同じOAuth、scope: user:read:follows）が
+ * 済んでいない場合は何もしない（連携すればフォロー中の配信開始が通知されるようになる）。
+ */
+async function runTwitchFollowedNotificationCheck() {
+  if (!store.get('twitchUserAuth')) return;
+  try {
+    const [roster, liveFollowed] = await Promise.all([
+      getCachedFollowedTwitchRoster(),
+      getCachedFollowedLiveTwitchChannels(),
+    ]);
+    const candidateKeys = new Set(roster.map((f) => `twitch:${f.channel.toLowerCase()}`));
+    const liveNow = new Map();
+    liveFollowed.forEach((s) => {
+      const key = `twitch:${s.login.toLowerCase()}`;
+      candidateKeys.add(key); // rosterに万一含まれない場合の保険
+      liveNow.set(key, { channel: s.login, platform: 'twitch', title: s.title || '' });
+    });
+    detectAndRecordNewlyLive('twitch', candidateKeys, liveNow);
+  } catch (err) {
+    // トークン失効・レート制限等。次回のポーリングで復旧を試みるため通知は出さない。
+  }
+}
+
+/** トラッキング対象チャンネルの有無に関わらず常時起動する（配信開始検知は全登録チャンネルが対象のため）。 */
+function startStreamStartNotificationWatcher() {
+  if (streamStartNotificationTimer) return;
+  runStreamStartNotificationCheck(); // 起動直後に即時1回実行（renderer.js側のupdateChipMetaBadges初回呼び出しと重複しても冪等なため実害なし）
+  streamStartNotificationTimer = setInterval(runStreamStartNotificationCheck, STREAM_START_NOTIFICATION_INTERVAL_MS);
+}
+
+function stopStreamStartNotificationWatcher() {
+  if (!streamStartNotificationTimer) return;
+  clearInterval(streamStartNotificationTimer);
+  streamStartNotificationTimer = null;
+}
+
+// ---- Kickフォロー中チャンネルの配信開始検知（通知タブ刷新2026-08-09、ユーザー要望でKickも対象化） ----
+// fetchKickFollowedChannels()は隠しBrowserView生成・ページ読み込みを伴う重い処理で、Kick側の
+// Bot判定リスクもあるため（既存コメント参照）、Twitch/YouTubeと同じ60秒間隔の常時ポーリングには
+// 使わず、間隔を大きく取った専用タイマー（3分間隔）で検知する。
+const KICK_FOLLOWED_NOTIFICATION_INTERVAL_MS = 3 * 60 * 1000;
+let kickFollowedNotificationTimer = null;
+let kickFollowedNotificationCheckRunning = false;
+
+async function runKickFollowedNotificationCheck() {
+  if (kickFollowedNotificationCheckRunning) return;
+  kickFollowedNotificationCheckRunning = true;
+  try {
+    // fetchKickFollowedChannels()はフォロー中全件（オンライン/オフライン問わず、isLive付き）を
+    // 1回のAPI呼び出しで返すため、Twitchのようにroster取得と別立てにする必要がない。
+    const followed = await fetchKickFollowedChannels();
+    const candidateKeys = new Set();
+    const liveNow = new Map();
+    followed.forEach((c) => {
+      const key = `kick:${c.channel.toLowerCase()}`;
+      candidateKeys.add(key);
+      if (c.isLive) liveNow.set(key, { channel: c.channel, platform: 'kick', title: c.title || '' });
+    });
+    detectAndRecordNewlyLive('kick', candidateKeys, liveNow);
+  } catch (err) {
+    // Kick未ログイン・スクレイプ失敗等。次回のポーリングで復旧を試みるため通知は出さない。
+  } finally {
+    kickFollowedNotificationCheckRunning = false;
+  }
+}
+
+function startKickFollowedNotificationWatcher() {
+  if (kickFollowedNotificationTimer) return;
+  runKickFollowedNotificationCheck();
+  kickFollowedNotificationTimer = setInterval(runKickFollowedNotificationCheck, KICK_FOLLOWED_NOTIFICATION_INTERVAL_MS);
+}
+
+function stopKickFollowedNotificationWatcher() {
+  if (!kickFollowedNotificationTimer) return;
+  clearInterval(kickFollowedNotificationTimer);
+  kickFollowedNotificationTimer = null;
 }
 
 /** 指定チャンネルのエモート一覧＋グローバルエモートを取得する */
@@ -4011,6 +4647,10 @@ async function fetchEmotesForChannel(channelName) {
  * 裏で読み込み、絵文字ピッカーを開いてそこに並ぶ画像を読み取る非公式の方式で代替する
  * （DOM scraping、YouTube側のUI変更で効かなくなる可能性がある）。
  * 現在配信中でない（動画IDが未解決の）チャンネルでは取得できない制約がある。
+ * 2026-08-17修正: 「取得しても0件のまま何も表示されない」と原因が伝わりにくかったため、
+ * ピッカーの描画待ちを固定時間からポーリング方式に変更（環境差での取りこぼしを軽減）した上で、
+ * 0件だった場合はピッカー自体が開けなかったのか/固有スタンプが無かっただけなのかを区別した
+ * エラーメッセージを投げるようにした（詳細は関数内コメント参照）。
  */
 async function fetchYoutubeEmotesForChannel(channelName) {
   const entry = streamViews.get(channelName);
@@ -4030,20 +4670,59 @@ async function fetchYoutubeEmotesForChannel(channelName) {
     );
     // チャット欄の初期化を待つ
     await new Promise((resolve) => setTimeout(resolve, 1500));
+    // 2026-08-17実機調査で判明: YouTubeのライブチャットは、このBrowserViewが使っている
+    // persist:youtubeパーティションにGoogleアカウントのログインセッションが無いと、
+    // メッセージ入力欄（<yt-live-chat-message-input-renderer>）自体が描画されず、代わりに
+    // 「ログインしてチャットを始める」ボタンだけが表示される（メッセージ一覧の閲覧はログイン
+    // 不要だが、送信欄・絵文字ピッカーはログイン必須）。
+    // 2026-08-17追加修正: 当初はこの入力欄の有無を1.5秒待機後に1回だけ判定していたが、
+    // 実機確認の結果「YouTubeアカウント連携済みでも毎回needsLogin扱いになる」不具合が判明した。
+    // 原因は、ログイン済みであっても入力欄の描画自体（Polymerコンポーネントのハイドレーション）
+    // に1.5秒より時間がかかることがあり、単発チェックだと描画完了前に「未ログイン」と誤判定
+    // していたため。カテゴリー検出と同じポーリングループに統合し、入力欄が現れるまで（＝ログイン
+    // 済みと確定するまで）最大数秒間待ってから、それでも現れなければ初めて「未ログイン」と
+    // 判定するように変更した。
+    //
     // ピッカーはカテゴリー毎に<yt-emoji-picker-category-renderer>が並ぶ構造で、
     // 先頭（0番目）は検索結果表示用の空プレースホルダー、2番目（1番目）がそのチャンネル固有の
     // スタンプ（メンバーシップ絵文字）一覧になっている（実機のDOM構造を実際に確認して特定した値）。
+    // ピッカー描画のタイミングが環境によってばらつくことがあり、固定待機だと間に合わず取りこぼす
+    // （categories==0のまま）ケースがあったため、categoriesが現れるまでポーリングする。
     const script = `(function () {
-      var btn = document.querySelector('#emoji-picker-button button') ||
-        document.querySelector('yt-live-chat-message-input-renderer #emoji-picker-button button');
-      if (btn) btn.click();
+      var pickerOpened = false;
+      function tryOpenPicker() {
+        var inputRenderer = document.querySelector('yt-live-chat-message-input-renderer');
+        if (!inputRenderer) return false;
+        if (!pickerOpened) {
+          var btn = document.querySelector('#emoji-picker-button button') ||
+            inputRenderer.querySelector('#emoji-picker-button button');
+          if (btn) { btn.click(); pickerOpened = true; }
+        }
+        return true;
+      }
+      function readCategories() {
+        var picker = document.querySelector('yt-emoji-picker-renderer');
+        if (!picker) return null;
+        var categories = picker.querySelectorAll('yt-emoji-picker-category-renderer');
+        return categories.length ? categories : null;
+      }
       return new Promise(function (resolve) {
-        setTimeout(function () {
-          var picker = document.querySelector('yt-emoji-picker-renderer');
-          if (!picker) { resolve([]); return; }
-          var categories = picker.querySelectorAll('yt-emoji-picker-category-renderer');
+        var attempts = 0;
+        // 入力欄の描画待ち（ログイン判定）にカテゴリー検出より多めの試行回数を割り当てる
+        // （ハイドレーションが遅い環境でも「未ログイン」の誤判定を避けるため）。
+        var maxAttempts = 10;
+        (function poll() {
+          attempts++;
+          var loggedIn = tryOpenPicker();
+          var categories = loggedIn ? readCategories() : null;
+          if (!categories && attempts < maxAttempts) {
+            setTimeout(poll, 500);
+            return;
+          }
+          if (!loggedIn) { resolve({ list: [], categoriesFound: 0, needsLogin: true }); return; }
+          if (!categories) { resolve({ list: [], categoriesFound: 0 }); return; }
           var channelCategory = categories[1];
-          if (!channelCategory) { resolve([]); return; }
+          if (!channelCategory) { resolve({ list: [], categoriesFound: categories.length }); return; }
           var imgs = Array.from(channelCategory.querySelectorAll('img'));
           var seen = {};
           var result = [];
@@ -4054,12 +4733,32 @@ async function fetchYoutubeEmotesForChannel(channelName) {
             seen[alt] = true;
             result.push({ id: alt, name: alt, channel: null, imageUrl: src });
           });
-          resolve(result);
-        }, 1000);
+          resolve({ list: result, categoriesFound: categories.length });
+        })();
       });
     })();`;
-    const list = await view.webContents.executeJavaScript(script);
-    return Array.isArray(list) ? list : [];
+    const scraped = await view.webContents.executeJavaScript(script);
+    if (scraped && scraped.needsLogin) {
+      throw new Error(
+        'YouTubeアカウントが未連携のようです（環境設定の「アカウント連携」からYouTubeにログインすると、チャット入力欄・スタンプ選択が有効になり取得できるようになります）'
+      );
+    }
+    const list = scraped && Array.isArray(scraped.list) ? scraped.list : [];
+    const categoriesFound = (scraped && scraped.categoriesFound) || 0;
+    if (!list.length) {
+      // 2026-08-17追記: YouTubeのチャンネル固有スタンプは「メンバーシップ特典の絵文字」であり、
+      // ①そのチャンネルがメンバーシップ機能自体を提供していない、②連携中のGoogleアカウントが
+      // そのチャンネルの有料メンバーでない、のいずれかに該当する配信では、ページ構造が正常でも
+      // 固有スタンプが1つも存在しない（＝0件が正しい結果）のが実機確認で判明した。
+      // categoriesFound>=2（ピッカー自体は正常に開けている）の場合はこのケースの可能性が高いため、
+      // その旨をエラーメッセージに明記する。
+      throw new Error(
+        categoriesFound < 2
+          ? 'スタンプ一覧を開けませんでした（YouTube側のページ構造変化の可能性があります）'
+          : 'このチャンネル固有のスタンプが見つかりませんでした（YouTubeのチャンネル固有スタンプはメンバーシップ特典のため、このチャンネルがメンバーシップ機能を提供していない場合や、連携中のアカウントがそのチャンネルの有料メンバーでない場合は0件になります。それ以外にも配信中でもスタンプが設定されていない場合があります）'
+      );
+    }
+    return list;
   } finally {
     try {
       view.webContents.loadURL('about:blank');
@@ -4962,6 +5661,42 @@ function isAutoTuneInTarget(platform, channel) {
   return getAutoTuneInTargets().some((t) => t.platform === platform && t.channel.toLowerCase() === key);
 }
 
+// ---- YouTube通知対象リスト（通知タブ刷新2026-08-09） ----
+
+/** YouTube通知対象リストを取得する */
+function getYoutubeNotificationTargets() {
+  return store.get('youtubeNotificationTargets');
+}
+
+/** リストを丸ごと置き換える */
+function setYoutubeNotificationTargets(list) {
+  const clean = Array.isArray(list)
+    ? list
+        .filter((t) => t && t.channel)
+        .map((t) => ({ channel: String(t.channel), displayName: String(t.displayName || t.channel) }))
+    : [];
+  store.set('youtubeNotificationTargets', clean);
+  return clean;
+}
+
+/** 1件追加する（同一チャンネルの重複追加は無視する）。 */
+function addYoutubeNotificationTarget(channel, displayName) {
+  const trimmed = String(channel || '').trim();
+  if (!trimmed) return getYoutubeNotificationTargets();
+  const list = getYoutubeNotificationTargets();
+  const key = trimmed.toLowerCase();
+  if (list.some((t) => t.channel.toLowerCase() === key)) return list;
+  list.push({ channel: trimmed, displayName: String(displayName || trimmed) });
+  return setYoutubeNotificationTargets(list);
+}
+
+/** 1件削除する。 */
+function removeYoutubeNotificationTarget(channel) {
+  const key = String(channel || '').toLowerCase();
+  const list = getYoutubeNotificationTargets().filter((t) => t.channel.toLowerCase() !== key);
+  return setYoutubeNotificationTargets(list);
+}
+
 /**
  * フォロー中のTwitchチャンネル全員（オンライン/オフライン問わず）を取得する。
  * 「全フォロー/登録一覧」で対象チャンネルを選ぶためのもの（fetchFollowedLiveChannelsと違い配信中判定はしない）。
@@ -4989,6 +5724,36 @@ async function fetchAllFollowedTwitchChannels() {
     if (!cursor || page_data.length < 100) break;
   }
   return result;
+}
+
+// 通知タブ刷新（2026-08-09）: フォロー中チャンネル全件(fetchAllFollowedTwitchChannels)・
+// 現在ライブなフォロー中チャンネル(fetchFollowedLiveChannels)は、Auto Tune-In（有効時25秒間隔）と
+// 通知タブの検知（60秒間隔）の両方から呼ばれうる。同じ結果を短時間に何度も取得しないよう、
+// 軽量なメモリキャッシュを共有する（TTLの間はキャッシュを返すだけで実際のHelix APIは叩かない）。
+const FOLLOWED_TWITCH_CACHE_TTL_MS = 20 * 1000;
+let followedTwitchRosterCache = { data: null, fetchedAt: 0 };
+let followedLiveTwitchCache = { data: null, fetchedAt: 0 };
+
+/** フォロー中Twitchチャンネル全件（オンライン/オフライン問わず）をキャッシュ付きで取得する。 */
+async function getCachedFollowedTwitchRoster() {
+  const now = Date.now();
+  if (followedTwitchRosterCache.data && now - followedTwitchRosterCache.fetchedAt < FOLLOWED_TWITCH_CACHE_TTL_MS) {
+    return followedTwitchRosterCache.data;
+  }
+  const data = await fetchAllFollowedTwitchChannels();
+  followedTwitchRosterCache = { data, fetchedAt: now };
+  return data;
+}
+
+/** フォロー中Twitchチャンネルのうち現在ライブなものをキャッシュ付きで取得する。 */
+async function getCachedFollowedLiveTwitchChannels() {
+  const now = Date.now();
+  if (followedLiveTwitchCache.data && now - followedLiveTwitchCache.fetchedAt < FOLLOWED_TWITCH_CACHE_TTL_MS) {
+    return followedLiveTwitchCache.data;
+  }
+  const data = await fetchFollowedLiveChannels();
+  followedLiveTwitchCache = { data, fetchedAt: now };
+  return data;
 }
 
 // ---- Twitchアバター画像（配信チェックパネルのカード表示用） ----
@@ -5142,7 +5907,9 @@ async function runAutoTuneInCheck() {
     const liveLoginsTwitch = new Set();
     let twitchCandidates = [];
     try {
-      const liveFollowed = await fetchFollowedLiveChannels();
+      // 通知タブ刷新（2026-08-09）: 通知タブの検知（60秒間隔）と同じ結果を共有するキャッシュ経由に
+      // 変更（直接呼ぶとAuto Tune-In(25秒間隔)と通知検知の両方が独立にHelixを叩き、無駄が生じるため）。
+      const liveFollowed = await getCachedFollowedLiveTwitchChannels();
       const filtered = twitchTargets.size
         ? liveFollowed.filter((s) => twitchTargets.has(s.login.toLowerCase()))
         : liveFollowed;
@@ -5662,7 +6429,8 @@ function swapZappingTile(candidate) {
   const previous = currentZappingChannel;
   if (previous && streamViews.has(previous)) {
     // 新チャンネルにも同じタイル位置・チャット表示設定を引き継がせるため、
-    // removeChannel で消える前に値を退避し、addChannel前に先回りしてstoreへ書き込んでおく
+    // removeChannel で前チャンネルのタイルが消える前に値を退避し、addChannel前に先回りして
+    // 新チャンネル側のキーへ書き込んでおく（前チャンネル自体の設定はremoveChannel後もstoreに残る）
     const layouts = store.get('tileLayouts');
     const savedRect = layouts[previous];
     const chatHiddenMap = store.get('chatHidden');
@@ -5684,8 +6452,7 @@ function swapZappingTile(candidate) {
   addChannel(candidate.channel, { platform: candidate.platform, youtubeVideoId: candidate.youtubeVideoId });
   currentZappingChannel = candidate.channel;
   // ザッピングタイル専用に保存済みの音量（アプリ再起動をまたいでも維持）を、切り替わった新チャンネルへ
-  // 都度再適用する。個別のchannelVolumesはremoveChannelで消えるため、この再適用が無いと
-  // 切り替えのたびに音量が100（デフォルト）に戻ってしまう。
+  // 都度再適用する（切替先チャンネルの個別音量ではなく「ザッピングタイル」の音量を優先させるため）。
   setChannelVolume(candidate.channel, store.get('zappingVolume'));
   notifyRenderer('channels:changed');
 }
@@ -5896,9 +6663,30 @@ ipcMain.handle('channels:get-platforms', () => {
 // 重い処理（Kick分はBrowserView生成を伴う）のため、レンダラー側は60秒程度の間隔で定期呼び出しする想定。
 ipcMain.handle('channels:get-stream-meta', async () => {
   const meta = await fetchAllStreamMeta();
-  // #6対応: このポーリング結果を使って配信開始通知（通知タブ）の検知も同時に行う。
-  recordStreamStartNotifications(meta);
+  // 通知タブ刷新（2026-08-09、実機フィードバックで発覚した通知重複バグの修正）:
+  // 以前はここでもrecordStreamStartNotifications(meta)を呼んでいたが、main.js側の独立タイマー
+  // （startStreamStartNotificationWatcher）と合わせて2系統の60秒ポーリングが独立に検知を
+  // 走らせる形になっていた。TwitchのHelix APIレート制限やKickのBrowserViewスクレイプの
+  // 一時的な取得失敗で、ある回だけ特定チャンネルがmetaから欠落する（1回だけ「オフライン」に
+  // 見える）ことがあり、2系統が短い間隔で交互に走ると「オフライン→ライブ」の遷移が
+  // 実際には配信が止まっていないのに誤って複数回検出され、同じ配信開始が重複通知される
+  // 不具合の原因になっていた。検知の唯一のトリガーをstartStreamStartNotificationWatcher側に
+  // 一本化し、ここでは表示用メタ情報の取得のみ行う（通知検知は行わない）。
   return meta;
+});
+
+// 2026-08-09追加: mainWindow側のrenderer.js（applyStreamMetaToTileBars）から、毎秒計算済みの
+// アクティブタイルの表示内容（タイトル/カテゴリ/統計の文字列）を受け取り、そのままactiveInfoBarView
+// （アクティブタイル情報帯の専用BrowserView）へ転送する。fetchAllStreamMeta()をここで再度
+// 叩かないことで、YouTube等へのリクエスト頻度を増やさない設計にしている（詳細はupdateActiveInfoBar
+// 付近のコメント参照）。応答不要のfire-and-forgetなので.handleではなく.onを使う。
+ipcMain.on('active-info-bar:push-content', (_e, payload) => {
+  if (!activeInfoBarView || !payload) return;
+  try {
+    activeInfoBarView.webContents.send('active-info-bar:content', payload);
+  } catch (_) {
+    /* ページ読み込み未完了・破棄後などは無視 */
+  }
 });
 
 ipcMain.handle('drops:open', () => {
@@ -5945,12 +6733,21 @@ ipcMain.handle('settings:get-all', () => ({
   commentFontFamily: store.get('commentFontFamily'),
   chatIntegrationMode: store.get('chatIntegrationMode'),
   unifiedFeedPlatformFilter: store.get('unifiedFeedPlatformFilter'),
+  tileInfoBarEnabled: store.get('tileInfoBarEnabled'),
 }));
 
 ipcMain.handle('settings:set-all', (_e, partial) => {
   const reloadNeeded = 'parentDomain' in partial && partial.parentDomain !== store.get('parentDomain');
+  const infoBarToggled =
+    'tileInfoBarEnabled' in partial && partial.tileInfoBarEnabled !== store.get('tileInfoBarEnabled');
   Object.entries(partial).forEach(([k, v]) => store.set(k, v));
   if ('layoutColumns' in partial) relayoutStreamViews();
+  if (infoBarToggled) {
+    // 情報帯の高さ配分が変わるため、既存タイル全部の再配置とリサイズ有効辺の再送が両方必要
+    // （片方だけだと「バーは消えたが下端リサイズができない」等の中途半端な状態になる）。
+    relayoutStreamViews();
+    streamViews.forEach((_entry, channelName) => sendEdgeConfig(channelName));
+  }
   if (reloadNeeded) {
     // parentDomain 変更はTwitch埋め込みにのみ関係するため、YouTube/Kickチャンネルは対象外
     const parent = store.get('parentDomain');
@@ -6035,6 +6832,47 @@ ipcMain.handle('chat-integration:set-hidden', (_e, { channel, hidden }) => {
   return true;
 });
 
+// 2026-08-09追加: チャット統合の設定ウィンドウ（歯車アイコン）。
+ipcMain.handle('chat-settings-window:open', () => {
+  createChatSettingsWindow();
+  return true;
+});
+ipcMain.handle('chat-settings-window:close', () => {
+  if (chatSettingsWindow && !chatSettingsWindow.isDestroyed()) chatSettingsWindow.close();
+  return true;
+});
+
+/** 常時検知ワード一覧を{ list }の形でメインウィンドウへ配信（renderer.js側でハイライト再適用に使う） */
+function notifyChatWatchWordsChanged() {
+  notifyRenderer('chat-watch-words:changed', store.get('chatWatchWords'));
+}
+
+ipcMain.handle('chat-watch-words:get', () => store.get('chatWatchWords'));
+ipcMain.handle('chat-watch-words:set', (_e, list) => {
+  // トリム・空文字除外・重複除外（大小区別なしで重複扱い、表示は最初に登録された表記を残す）。
+  const seen = new Set();
+  const cleaned = [];
+  (Array.isArray(list) ? list : []).forEach((raw) => {
+    const word = String(raw || '').trim();
+    if (!word) return;
+    const key = word.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(word);
+  });
+  store.set('chatWatchWords', cleaned);
+  notifyChatWatchWordsChanged();
+  return cleaned;
+});
+
+ipcMain.handle('chat-scroll-lock:get', () => store.get('chatTimelineScrollLockEnabled'));
+ipcMain.handle('chat-scroll-lock:set', (_e, value) => {
+  const enabled = !!value;
+  store.set('chatTimelineScrollLockEnabled', enabled);
+  notifyRenderer('chat-scroll-lock:changed', enabled);
+  return enabled;
+});
+
 // チャンネル毎の個別音量調整
 ipcMain.handle('channels:get-volumes', () => store.get('channelVolumes'));
 
@@ -6084,11 +6922,18 @@ ipcMain.handle('ui:close-all-side-panels', () => {
 
 // 汎用オーバーレイパネル基盤（#16向け、2026-08-07新設）。openSidePanel系とは独立したIPC。
 ipcMain.handle('ui:open-overlay-panel', (_e, panelId) => {
-  // 上のui:open-side-panelコメントと対になる修正: オーバーレイパネル（配信チェック等）を
-  // 開く際も、既に開いているサイドパネルが同様にoverlayPanelViewの裏へ隠れてしまうため、
-  // 先にすべて閉じておく。ただし閉じた内容（チャット統合等）はcloseOverlayPanel()で
-  // 復元できるようスナップショットしておく（バグ修正: 復元し忘れによる表示崩れ対策）。
-  if (openPanels.length) {
+  // 2026-08-09修正（実機報告: ヘルプ/フィードバック/会員登録等を開くと配信画面が一瞬
+  // 拡大して見える問題）: 以前はここで無条件にcloseAllSidePanels()し、開いていた
+  // サイドパネル（チャット統合等）を強制的に閉じていた。しかしOVERLAY_PANEL_CENTERED_IDS
+  // に該当するパネル（現状ヘルプ・ようこそ・有料ロック・フィードバック・会員登録の全て）は
+  // relayoutOverlayPanel()でコンテンツ表示領域全体（x:0〜幅いっぱい）を覆った上で
+  // setTopBrowserViewにより最前面へ出るため、配下のサイドパネルを閉じなくても配信タイルへの
+  // クリック漏れは起きない。closeAllSidePanels()はactiveSidePanelWidthを0に戻し
+  // relayoutStreamViews()を呼ぶため、配信タイルの幅が一瞬全幅に戻ってしまう副作用があった。
+  // 「配信タイルの幅は一切変更しない」という本来の設計方針（openOverlayPanel関数コメント参照）
+  // に立ち返り、centered型パネルではこの処理自体を行わないようにする。今後、コンテンツ領域を
+  // 覆わない非centered型のオーバーレイパネルを追加する場合にのみ、この退避処理が必要になる。
+  if (!OVERLAY_PANEL_CENTERED_IDS.has(panelId) && openPanels.length) {
     sidePanelsSnapshotForOverlay = openPanels.slice();
     closeAllSidePanels();
   }
@@ -6110,10 +6955,9 @@ ipcMain.handle('ui:open-help-section', (_e, helpTab, helpAnchor) => {
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
-  if (openPanels.length) {
-    sidePanelsSnapshotForOverlay = openPanels.slice();
-    closeAllSidePanels();
-  }
+  // 2026-08-09修正: 'help'は常にOVERLAY_PANEL_CENTERED_IDSに含まれる（コンテンツ表示領域を
+  // 覆う）ため、上のui:open-overlay-panelと同じ理由でcloseAllSidePanels()は不要
+  // （呼ぶと配信タイルが一瞬全幅化する副作用があった）。
   openOverlayPanel('help', { helpTab: helpTab || '', helpAnchor: helpAnchor || '' });
   return true;
 });
@@ -6310,10 +7154,17 @@ ipcMain.handle('pro-auth:set-backend-url', (_e, value) => {
 ipcMain.handle('pro-auth:request-code', async (_e, email) => {
   const trimmed = String(email || '').trim();
   if (!trimmed) throw new Error('メールアドレスを入力してください');
-  await paymentBackendFetch('/auth/request-code', {
-    method: 'POST',
-    body: JSON.stringify({ email: trimmed }),
-  });
+  try {
+    await paymentBackendFetch('/auth/request-code', {
+      method: 'POST',
+      body: JSON.stringify({ email: trimmed }),
+    });
+  } catch (e) {
+    if (String(e.message || e) === 'not_found') {
+      throw new Error('このメールアドレスの会員記録が見つかりませんでした。ご登録・ご購入時のメールアドレスをご確認ください。');
+    }
+    throw e;
+  }
   return true;
 });
 
@@ -6418,6 +7269,13 @@ ipcMain.handle('ui:floating-dropdown-open', (_e, { id, rect }) => {
 ipcMain.handle('ui:floating-dropdown-set-rect', (_e, { id, rect }) => {
   floatingDropdowns[id]?.setRect(rect);
   return true;
+});
+
+// app-menu余白バグ修正（2026-08-10）: floating-dropdown.js側が実描画後に計測したscrollHeightを
+// 都度報告してくる経路。返信不要のfire-and-forgetのため、他のfloating-dropdown系IPCと異なり
+// on（send）で受ける。
+ipcMain.on('ui:floating-dropdown-report-height', (_e, { id, height }) => {
+  floatingDropdowns[id]?.reportHeight(height);
 });
 
 ipcMain.handle('ui:floating-dropdown-close', (_e, id) => {
@@ -6675,6 +7533,23 @@ ipcMain.handle('auto-tune-in:set-targets', (_e, targets) => setAutoTuneInTargets
 // 「全フォロー/登録一覧」。専用の「読み込む」ボタンからのみ呼ばれる（常時ポーリングなし）。
 ipcMain.handle('auto-tune-in:fetch-all-follow-candidates', () => fetchAllFollowCandidates());
 
+// YouTube通知対象リスト（通知タブ刷新2026-08-09）。追加/削除の直後は、次の60秒ポーリングを
+// 待たずに1回即時チェックを走らせ、「登録したのに反映が遅い」という体感を避ける
+// （Auto Tune-Inの対象指定変更時と同じ配慮、setAutoTuneInTargets参照）。
+ipcMain.handle('youtube-notification-targets:get', () => getYoutubeNotificationTargets());
+ipcMain.handle('youtube-notification-targets:add', (_e, payload) => {
+  const { channel, displayName } = typeof payload === 'string' ? { channel: payload } : payload || {};
+  const list = addYoutubeNotificationTarget(channel, displayName);
+  runYoutubeNotificationTargetsCheck(); // 追加直後の即時反映
+  notifyNotificationsStateChanged();
+  return list;
+});
+ipcMain.handle('youtube-notification-targets:remove', (_e, channel) => {
+  const list = removeYoutubeNotificationTarget(channel);
+  notifyNotificationsStateChanged();
+  return list;
+});
+
 // 配信チェックパネルのプラットフォーム絞り込み（#8対応の永続化）。値自体は従来通り
 // store の unifiedFeedPlatformFilter（settings:get-all/set-all でも読める）に保存する。
 // パネルがオーバーレイ側BrowserViewへ移った（2026-08-08）ため、巨大な settings:get-all /
@@ -6853,6 +7728,8 @@ app.whenReady().then(() => {
   });
   syncDropsAutoWatcherState();
   syncAutoTuneInWatcherState();
+  startStreamStartNotificationWatcher(); // 通知タブ刷新（2026-08-09）: 対象チャンネルの有無に関わらず常時起動
+  startKickFollowedNotificationWatcher(); // 通知タブ刷新（2026-08-09）: Kickフォロー中チャンネルの配信開始検知（3分間隔）
 
   // 起動時のアップデート確認は「静かに」行う。ダイアログ等は一切出さず、結果は
   // メニューバーの「アップデートを確認」を開いた時に見える状態にしておくだけ。
@@ -6868,6 +7745,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   stopDropsAutoWatcher();
   stopAutoTuneInWatcher();
+  stopStreamStartNotificationWatcher();
+  stopKickFollowedNotificationWatcher();
   if (zappingTimer) clearTimeout(zappingTimer);
   if (process.platform !== 'darwin') app.quit();
 });

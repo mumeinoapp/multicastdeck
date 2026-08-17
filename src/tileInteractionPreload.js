@@ -14,20 +14,31 @@
  */
 const { ipcRenderer } = require('electron');
 
-// タイル端から何pxまでを「リサイズ用の縁」とみなすか
-const EDGE_PX = 10;
+// タイル端から何pxまでを「リサイズ用の縁」とみなすか（既定値。YouTubeタイルはmain.jsの
+// sendEdgeConfig()からedgePxで上書きされる、下記ipcRenderer.on参照）
+let EDGE_PX = 10;
 
 let channelName = null;
 let viewTarget = 'stream'; // 'stream' | 'chat'（メインプロセス側がこのBrowserViewを一時的に隠す判断に使う）
 // メインプロセスから渡される、このBrowserViewで有効な辺（配信側/チャット側で異なる）
 let edges = { top: true, bottom: true, left: true, right: true };
 let dragging = false;
+// 2026-08-09追加（実機報告対応）: 通常は「移動ゾーン」のmousedownではpreventDefaultしない
+// （中央の移動ゾーン・通常クリックには影響しないようにするため、下記mousedownハンドラの
+// コメント参照）。ただしYouTubeタイルの自前ラッパー（main.js ensureYoutubeEmbedServer）は
+// 縁の部分に保護すべきクリック可能要素が無い一方、Chromiumの既定のテキスト選択/ネイティブ
+// ドラッグが誤発生してタイル全体が選択されたように見える不具合が実機で確認されたため、
+// このフラグがtrueの間は移動ゾーンでも常にpreventDefaultする（main.js側からYouTubeタイルにのみ
+// alwaysPreventDefault:trueが送られてくる）。
+let alwaysPreventDefault = false;
 
 ipcRenderer.on('tile-edge-config', (_event, payload) => {
   if (!payload) return;
   channelName = payload.channel;
   if (payload.target) viewTarget = payload.target;
   if (payload.edges) edges = payload.edges;
+  if (typeof payload.edgePx === 'number' && payload.edgePx > 0) EDGE_PX = payload.edgePx;
+  alwaysPreventDefault = !!payload.alwaysPreventDefault;
 });
 
 function zoneAt(x, y) {
@@ -66,6 +77,21 @@ function isNativeDragControl(target) {
       '[data-a-target*="progress" i]',
     ].join(', ')
   );
+}
+
+/**
+ * Chromiumは<img>/<a href>要素を既定でネイティブドラッグ可能(draggable=true)として扱う。
+ * Twitch本体のDOMは移動ゾーン（タイル中央）にもアバター画像等の<img>を重ねて表示しており、
+ * そこでmousedown直後にわずかでもポインタが動くとネイティブHTML5ドラッグが開始してしまい、
+ * 以降mousemoveがこのwindowへ届かなくなって（dragstart時にendDragが走るだけで移動は止まる）
+ * タイル移動が実質不可能になる不具合があった（2026-08-17報告）。Kick/YouTubeの埋め込みには
+ * 同様の<img>オーバーレイが無いため再現しない。ネイティブドラッグの起点になり得る要素上でだけ
+ * mousedownでpreventDefaultすることで、通常のクリック（mouseupで発火するclick自体は
+ * preventDefaultの影響を受けない）は温存しつつドラッグ横取りだけを止める。
+ */
+function isNativeDraggableElement(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  return !!target.closest('img, a[href]');
 }
 
 function cursorForZone(dir) {
@@ -137,7 +163,11 @@ window.addEventListener(
     // リサイズより先に開始してしまい、以降mousemoveが届かなくなって「数px動くと途切れる」不具合の
     // 原因になっていた。リサイズ開始時のみpreventDefaultすることでネイティブドラッグ自体の開始を
     // 抑止する（中央の移動ゾーン・通常クリックには影響しないため、再生ボタン等の操作性は維持される）。
-    if (dir) e.preventDefault();
+    // 2026-08-09追加: alwaysPreventDefault（YouTubeタイルのみtrue）の場合は、移動ゾーンの
+    // mousedownでも同様にpreventDefaultする。YouTubeの自前ラッパーの縁には保護すべき
+    // クリック可能要素が無いため、常時preventDefaultしても再生ボタン等への影響が無い
+    // （実際のYouTube UIはクロスオリジンiframeの中）。
+    if (dir || alwaysPreventDefault || isNativeDraggableElement(e.target)) e.preventDefault();
     ipcRenderer.send('tile-interaction:start', {
       channel: channelName,
       origin: viewTarget,

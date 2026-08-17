@@ -20,7 +20,6 @@
       <span class="menu-bar-label">表示</span>
       <div class="menu-bar-dropdown">
         <div class="menu-bar-dropdown-item" data-action="reload">再読み込み</div>
-        <div class="menu-bar-dropdown-item" data-action="toggle-devtools">開発者ツール</div>
         <div class="menu-bar-dropdown-separator"></div>
         <div class="menu-bar-dropdown-item" data-action="relayout">レイアウトを再計算</div>
       </div>
@@ -101,7 +100,7 @@
       <button id="zapping-btn" class="action-btn pro-btn" draggable="true" data-key="zapping" data-pro-feature="true">🎲 ザッピング<span class="pro-badge">PRO</span></button>
       <button id="unified-feed-btn" class="action-btn pro-btn" draggable="true" data-key="unified-feed" data-pro-feature="true" title="フォロー中/登録中で現在配信中の配信者一覧・自動追加設定">📡 配信一覧<span class="pro-badge">PRO</span></button>
       <button id="layout-auto-arrange-btn" class="action-btn" draggable="true" data-key="auto-arrange" title="タイルの位置・サイズを自動整列でリセット">🔲 自動整列</button>
-      <button id="settings-open-btn" class="action-btn" draggable="true" data-key="settings" title="設定">⚙ 設定</button>
+      <button id="settings-open-btn" class="action-btn" draggable="true" data-key="settings" title="環境設定">⚙ 環境設定</button>
     </div>
 
     <!-- 右端固定クラスタ（ドラッグ並び替え対象外）。縦3段で、一番下に常時表示の音量を置く。 -->
@@ -161,9 +160,36 @@
   </div>
 
   <div id="chat-integration-panel" class="hidden">
-    <div class="panel-header">
-      <h3>🗂 チャット統合</h3>
-      <button id="chat-integration-close-btn">×</button>
+    <div class="panel-header chat-integration-header">
+      <span class="chat-integration-icon" title="チャット統合">🗂</span>
+      <!-- 2026-08-09追加: 「チャット統合」の文言に代えてワード検索欄を設置（全タブ統合の
+           チャット本文をリアルタイムに検索・強調表示する。詳細はrenderer.js参照）。 -->
+      <div class="chat-integration-search-wrap">
+        <input
+          id="chat-integration-search-input"
+          type="text"
+          placeholder="チャット内をワード検索"
+          autocomplete="off"
+        />
+        <span id="chat-integration-search-count" class="chat-integration-search-count hidden"></span>
+        <button
+          id="chat-integration-search-clear-btn"
+          class="chat-integration-search-clear-btn hidden"
+          type="button"
+          title="検索をクリア"
+        >
+          ×
+        </button>
+      </div>
+      <button
+        id="chat-integration-settings-btn"
+        class="chat-integration-settings-btn"
+        type="button"
+        title="チャット統合の設定（常時検知ワード・遡り中の自動更新停止）"
+      >
+        ⚙
+      </button>
+      <button id="chat-integration-close-btn" title="閉じる">×</button>
     </div>
     <div class="chat-integration-mode-switch">
       <button id="chat-integration-mode-tab-btn" class="active">タブ</button>
@@ -173,6 +199,7 @@
     <div id="chat-integration-timeline-wrap" class="chat-integration-timeline-wrap hidden">
       <div id="chat-integration-timeline" class="chat-integration-timeline"></div>
       <button id="chat-integration-jump-bottom-btn" class="chat-integration-jump-bottom-btn hidden">↓ 最新へ</button>
+      <div id="chat-integration-timeline-lock-overlay" class="pro-lock-overlay hidden">🔒 有料会員限定機能です</div>
     </div>
     <div id="chat-integration-send-row" class="chat-integration-send-row hidden">
       <input id="chat-integration-send-input" type="text" placeholder="上のタブで選択中のチャンネルへ送信" />
@@ -183,32 +210,35 @@
   <div id="zapping-modal" class="hidden">
     <div class="modal-content">
       <h2>🎲 ランダム自動切換え（ザッピング）</h2>
-      <p class="note">10〜30秒間隔で自動切換え。すべて空欄で条件なしで開始できます。詳細は「使い方/注記」参照。</p>
-      <div class="group">
-        <span class="field-label">対象</span>
-        <select id="zapping-platform-select">
-          <option value="twitch">Twitch</option>
-          <option value="youtube">YouTube（β版）</option>
-          <option value="kick">Kick</option>
-        </select>
-      </div>
-      <p id="zapping-youtube-note" class="note hidden">
-        ※YouTube版はβ版・非公式方式のため言語での絞り込みは非対応です。
-      </p>
-      <p id="zapping-kick-note" class="note hidden">
-        ※Kick版は設定画面のKick Client ID / Client Secretが必要です（ログイン不要）。ゲーム名欄にはKickのカテゴリ名を入力してください。
-      </p>
-      <label id="zapping-language-label">言語（例: ja / en、空欄で指定なし）</label>
-      <input id="zapping-language-input" type="text" placeholder="例: ja" />
-      <label>ゲーム名（空欄で指定なし）</label>
-      <input id="zapping-game-input" type="text" placeholder="例: Apex Legends" />
-      <label>タグ（カンマ区切り、ゆるい部分一致・空欄で指定なし）</label>
-      <input id="zapping-tags-input" type="text" placeholder="例: 初見歓迎, FPS" />
-      <div id="zapping-status" class="note"></div>
-      <div class="modal-actions">
-        <button id="zapping-start-btn">開始</button>
-        <button id="zapping-skip-btn" disabled>次へ</button>
-        <button id="zapping-stop-btn" disabled>停止</button>
+      <div id="zapping-body">
+        <p class="note">10〜30秒間隔で自動切換え。すべて空欄で条件なしで開始できます。詳細は「使い方/注記」参照。</p>
+        <div class="group">
+          <span class="field-label">対象</span>
+          <select id="zapping-platform-select">
+            <option value="twitch">Twitch</option>
+            <option value="youtube">YouTube（β版）</option>
+            <option value="kick">Kick</option>
+          </select>
+        </div>
+        <p id="zapping-youtube-note" class="note hidden">
+          ※YouTube版はβ版・非公式方式のため言語での絞り込みは非対応です。
+        </p>
+        <p id="zapping-kick-note" class="note hidden">
+          ※Kick版は設定画面のKick Client ID / Client Secretが必要です（ログイン不要）。ゲーム名欄にはKickのカテゴリ名を入力してください。
+        </p>
+        <label id="zapping-language-label">言語（例: ja / en、空欄で指定なし）</label>
+        <input id="zapping-language-input" type="text" placeholder="例: ja" />
+        <label>ゲーム名（空欄で指定なし）</label>
+        <input id="zapping-game-input" type="text" placeholder="例: Apex Legends" />
+        <label>タグ（カンマ区切り、ゆるい部分一致・空欄で指定なし）</label>
+        <input id="zapping-tags-input" type="text" placeholder="例: 初見歓迎, FPS" />
+        <div id="zapping-status" class="note"></div>
+        <div class="modal-actions">
+          <button id="zapping-start-btn">開始</button>
+          <button id="zapping-skip-btn" disabled>次へ</button>
+          <button id="zapping-stop-btn" disabled>停止</button>
+        </div>
+        <div id="zapping-lock-overlay" class="pro-lock-overlay hidden">🔒 有料会員限定機能です</div>
       </div>
       <div class="modal-actions">
         <button id="zapping-close-btn">閉じる</button>
@@ -246,14 +276,17 @@
       <div class="settings-divider"></div>
 
       <h3>Drops自動追加/削除 <span class="pro-badge">PRO</span></h3>
-      <p class="note">指定ゲームの配信中チャンネルを自動追加/削除します（60秒間隔）。詳細は「使い方/注記」参照。</p>
-      <div id="drops-auto-list"></div>
-      <div class="group drops-auto-add-row">
-        <input id="drops-auto-game-input" type="text" placeholder="ゲーム名（例: Apex Legends）" />
-        <input id="drops-auto-max-input" type="number" min="1" max="20" value="3" placeholder="上限" />
-        <button id="drops-auto-add-btn">追加</button>
+      <div id="drops-auto-section">
+        <p class="note">指定ゲームの配信中チャンネルを自動追加/削除します（60秒間隔）。詳細は「使い方/注記」参照。</p>
+        <div id="drops-auto-list"></div>
+        <div class="group drops-auto-add-row">
+          <input id="drops-auto-game-input" type="text" placeholder="ゲーム名（例: Apex Legends）" />
+          <input id="drops-auto-max-input" type="number" min="1" max="20" value="3" placeholder="上限" />
+          <button id="drops-auto-add-btn">追加</button>
+        </div>
+        <div id="drops-auto-status" class="note"></div>
+        <div id="drops-auto-lock-overlay" class="pro-lock-overlay hidden">🔒 有料会員限定機能です</div>
       </div>
-      <div id="drops-auto-status" class="note"></div>
 
       <div class="modal-actions">
         <button id="drops-hub-close-btn">閉じる</button>
@@ -296,6 +329,11 @@
         <option value="'Comic Sans MS', cursive">Comic Sans MS</option>
       </select>
       <p class="note">全タブ統合のコメント本文のみに適用されます（配信名・ユーザー名の書体は変わりません）。</p>
+
+      <label class="switch-row">
+        <input id="tile-info-bar-toggle" type="checkbox" class="switch-input" />
+        <span>配信タイル下部のメタ情報バー（配信者名・タイトル・視聴者数等）を表示</span>
+      </label>
 
       <label>Twitch Helix Client ID</label>
       <input id="helix-client-id-input" type="text" placeholder="dev.twitch.tv/console/apps で無料取得" />

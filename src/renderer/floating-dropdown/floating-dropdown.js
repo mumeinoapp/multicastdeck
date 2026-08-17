@@ -65,6 +65,16 @@ function renderRows(root, rows) {
 // メインウィンドウ側（renderer.js）は「今どのメニューが開いているか」の状態と、対応する
 // 既存DOM（#app-menu-bar内の.menu-bar-dropdown、見た目上は配信タイルの裏に隠れたままだが
 // レイアウト計算・データソースとしては生きている）から行データを都度読み取ってpushする。
+// app-menu余白バグ修正（2026-08-10）: メインウィンドウ側の隠れたDOM(.menu-bar-dropdown、
+// style.css基準)から算出したBrowserView矩形は、実際にここで描画する中身(floating-dropdown.css
+// 基準、フォントサイズや要素構成が異なる箇所がある)と高さがずれ、ファイル/表示/ヘルプ/
+// バージョン/通知の各ドロップダウン下部に余分な空白が生じていた。描画後にroot.scrollHeight
+// （実際に必要な高さ）を都度メインプロセスへ報告し、BrowserViewの高さを実寸へ補正してもらう。
+// 通知ドロップダウンのみ、意図的に「5件表示してスクロール」の上限(style.cssの
+// #notifications-menu-dropdown { max-height: 270px }と対応)を持つため、その場合は報告値を
+// 同じ上限でクランプし、既存のスクロールUXを崩さないようにする。
+const NOTIFICATIONS_DROPDOWN_MAX_HEIGHT = 270;
+
 function mountAppMenu() {
   const root = document.getElementById('app-menu-root');
   root.classList.remove('hidden');
@@ -73,16 +83,125 @@ function mountAppMenu() {
     if (!payload || payload.id !== 'app-menu') return;
     root.classList.toggle('wrap-rows', !!payload.wrap);
     renderAppMenuRows(root, payload.rows || []);
+    // root.scrollHeightの読み取り自体がレイアウトの再計算を強制するため、renderAppMenuRowsで
+    // 組み立てた直後でもタイミングのずれなく正確な高さが取れる（ResizeObserver等は不要）。
+    const measuredHeight = payload.wrap
+      ? Math.min(root.scrollHeight, NOTIFICATIONS_DROPDOWN_MAX_HEIGHT)
+      : root.scrollHeight;
+    window.floatingApi.reportContentHeight('app-menu', measuredHeight);
   });
 }
 
 function renderAppMenuRows(root, rows) {
+  // 通知タブ刷新（2026-08-09）: YouTube通知対象の追加入力欄は、通知の新着受信のたびに
+  // notifications:state-changed経由で本関数が再実行されrootが作り直されるため、何も対策しないと
+  // 入力途中のテキストが消えてしまう。再構築前に既存入力欄の値・フォーカス有無を退避し、
+  // 再構築後に復元する。
+  const existingInput = root.querySelector('.youtube-target-add-input');
+  const preservedInputValue = existingInput ? existingInput.value : '';
+  const preservedInputFocused = existingInput === document.activeElement;
+
   root.innerHTML = '';
   rows.forEach((row) => {
     if (row.type === 'separator') {
       const sep = document.createElement('div');
       sep.className = 'menu-bar-dropdown-separator';
       root.appendChild(sep);
+      return;
+    }
+    // 通知タブ刷新（2026-08-09）: 通知行はアイコンバッジ+テキストの2要素構成で、クリックすると
+    // その配信をメイン画面へ追加する専用の行タイプ。実際にユーザーがクリックするのはこちら側
+    // （BrowserViewのコピー）のため、mousedownで'app-menu'パネルへaction通知を送る。
+    if (row.type === 'notification') {
+      const el = document.createElement('div');
+      el.className = 'menu-bar-dropdown-item notification-item';
+      if (row.alreadyAdded) el.classList.add('already-added');
+
+      // renderer.js側のnotificationPlatformBadge()と同じ分岐（通知タブ刷新2026-08-09でYouTube追加）。
+      const badgeCls = row.platform === 'kick' ? 'kick' : row.platform === 'youtube' ? 'youtube' : 'twitch';
+      const glyph = row.platform === 'kick' ? 'K' : row.platform === 'youtube' ? '▶' : '●';
+      const badge = document.createElement('span');
+      badge.className = `notif-platform-badge ${badgeCls}`;
+      badge.textContent = glyph;
+      el.appendChild(badge);
+
+      const text = document.createElement('span');
+      text.className = 'notif-item-text';
+      text.textContent = row.text || row.channel || '';
+      el.appendChild(text);
+
+      if (!row.alreadyAdded) {
+        el.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          window.floatingApi.notify('app-menu', 'action', {
+            action: 'add-channel-from-notification',
+            channel: row.channel,
+            platform: row.platform,
+          });
+        });
+      }
+      root.appendChild(el);
+      return;
+    }
+    // 通知タブ刷新（2026-08-09）: YouTube通知対象リストの1件（チャンネル名＋×削除ボタン）。
+    if (row.type === 'youtube-target-item') {
+      const el = document.createElement('div');
+      el.className = 'menu-bar-dropdown-item youtube-target-item';
+
+      const text = document.createElement('span');
+      text.className = 'youtube-target-item-text';
+      text.textContent = row.label || row.channel || '';
+      el.appendChild(text);
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'youtube-target-remove-btn';
+      removeBtn.textContent = '×';
+      removeBtn.title = '通知対象から削除';
+      removeBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        window.floatingApi.notify('app-menu', 'youtube-target-remove', { channel: row.channel });
+      });
+      el.appendChild(removeBtn);
+
+      root.appendChild(el);
+      return;
+    }
+    // 通知タブ刷新（2026-08-09）: YouTube通知対象を追加するための入力欄＋追加ボタン。
+    if (row.type === 'youtube-target-add') {
+      const el = document.createElement('div');
+      el.className = 'menu-bar-dropdown-item youtube-target-add';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'youtube-target-add-input';
+      input.placeholder = '@ハンドル / チャンネル名';
+      // メニュー全体のドラッグ・閉じる判定に巻き込まれないよう伝播を止める。
+      input.addEventListener('mousedown', (e) => e.stopPropagation());
+
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'youtube-target-add-btn';
+      addBtn.textContent = '追加';
+
+      const submit = () => {
+        const value = input.value.trim();
+        if (!value) return;
+        window.floatingApi.notify('app-menu', 'youtube-target-add', { channel: value });
+        input.value = '';
+      };
+      addBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        submit();
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') submit();
+      });
+
+      el.appendChild(input);
+      el.appendChild(addBtn);
+      root.appendChild(el);
       return;
     }
     const el = document.createElement('div');
@@ -98,6 +217,15 @@ function renderAppMenuRows(root, rows) {
     }
     root.appendChild(el);
   });
+
+  // 退避しておいた入力欄の値・フォーカスを復元する（通知タブ刷新2026-08-09）。
+  if (preservedInputValue) {
+    const newInput = root.querySelector('.youtube-target-add-input');
+    if (newInput) {
+      newInput.value = preservedInputValue;
+      if (preservedInputFocused) newInput.focus();
+    }
+  }
 }
 
 // 音量ミキサー（旧rectOverlayHiding方式から移植、2026-08-07セッション内追加）。

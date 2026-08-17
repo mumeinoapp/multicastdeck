@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!--
+  チャット統合の設定ウィンドウ（2026-08-09新設）。main.jsのcreateChatSettingsWindow()が
+  loadFileで読み込む、独立したBrowserWindowの中身。
+
+  経緯: チャット統合パネルの歯車アイコンから開く設定画面をどこに置くか相談した結果、
+  「配信一覧」（src/renderer/stream-check-window/）と同じ独立BrowserWindow方式
+  （frame:false＋自作ヘッダー、parent:mainWindow、×/ESCのみ閉じる）を流用することになった。
+  ネットワーク通信は行わずelectron-storeの読み書きのみのため、中身は配信一覧よりだいぶ薄い。
+
+  中身は2つ:
+  ①「遡り中は自動更新を止める」トグル（元依頼: チャットを遡った時チャットの更新を止める設定）
+  ②「常時検知ワード」一覧の管理（元依頼: ワード検索機能に付随して、検索したワードの常時検知
+     項目を追加してほしいとの要望。ここに登録した単語はチャット統合パネルの検索欄への入力に
+     関わらず、常にハイライト表示され続ける）
+-->
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+    <title>チャット統合の設定</title>
+    <link rel="stylesheet" href="chat-settings-window.css" />
+  </head>
+  <body>
+    <div class="chat-settings-window">
+      <header class="chat-settings-window-header">
+        <span class="chat-settings-window-title">⚙ チャット統合の設定</span>
+        <button type="button" class="chat-settings-window-close" id="chat-settings-close-btn" aria-label="閉じる">×</button>
+      </header>
+
+      <main class="chat-settings-window-body">
+        <section class="chat-settings-section">
+          <div class="chat-settings-toggle-row">
+            <label class="chat-settings-switch">
+              <input type="checkbox" id="chat-settings-scroll-lock-checkbox" />
+              <span class="chat-settings-switch-track"><span class="chat-settings-switch-thumb"></span></span>
+            </label>
+            <div class="chat-settings-toggle-label">
+              <span class="chat-settings-toggle-title">遡り中は自動更新を止める</span>
+              <span class="chat-settings-toggle-note">
+                全タブ統合で過去ログを読むために上へスクロールしている間、新着メッセージの反映を一時停止します。
+                「↓ 最新へ」で最下部へ戻ると、止めていた間のメッセージがまとめて反映されます。
+              </span>
+            </div>
+          </div>
+        </section>
+
+        <section class="chat-settings-section">
+          <h2 class="chat-settings-section-title">常時検知ワード</h2>
+          <p class="chat-settings-section-note">
+            ここに登録した単語は、チャット統合パネルの検索欄に何も入力していない時でも、
+            全タブ統合のチャット内で常にハイライト表示されます。
+          </p>
+          <div class="chat-settings-watch-add-row">
+            <input type="text" id="chat-settings-watch-input" placeholder="検知したいワードを入力" autocomplete="off" />
+            <button type="button" id="chat-settings-watch-add-btn">追加</button>
+          </div>
+          <ul class="chat-settings-watch-list" id="chat-settings-watch-list"></ul>
+          <p class="chat-settings-watch-empty hidden" id="chat-settings-watch-empty">登録されているワードはありません</p>
+        </section>
+      </main>
+    </div>
+    <script src="chat-settings-window.js"></script>
+  </body>
+</html>

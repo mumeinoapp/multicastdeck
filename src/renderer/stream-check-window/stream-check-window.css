@@ -40,6 +40,37 @@ body {
   height: 100%;
 }
 
+/* 依頼#33: 無料会員はウィンドウ自体は開けるが中身を丸ごとグレーアウト+案内文言表示。
+   メインウィンドウのstyle.css（.pro-content-locked/.pro-lock-overlay）とは別スタイルシートの
+   ため、同じ効果をこのウィンドウ専用に複製している。 */
+#stream-check-content-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.pro-content-locked > *:not(.pro-lock-overlay) {
+  filter: grayscale(1);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.pro-lock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-weight: bold;
+}
+
 /* ---- ヘッダー ----
  * frame:falseにより唯一のタイトルバー表示となったため、-webkit-app-region:dragで
  * ウィンドウ全体のドラッグ移動を担う。中の×ボタンだけno-dragでクリック可能にする。 */
@@ -194,6 +225,9 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 12px 16px 16px;
+  /* frame:falseウィンドウはDWMの角丸クリップが窓の外周に直接掛かるため、
+     スクロールバーが真の右端に張り付いていると見切れる。右側に隙間を確保する。 */
+  margin-right: 3px;
 }
 
 /* 段階F追加: メインウィンドウ（style.css）・全タブ統合パネル等と同じ「オリジナル」スクロールバー

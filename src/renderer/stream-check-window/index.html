@@ -73,6 +73,10 @@
         <button type="button" id="stream-check-auth-cancel-btn">連携をキャンセル</button>
       </div>
 
+      <!-- 依頼#33: 無料会員でもこのウィンドウ自体は開けるが、中身（3タブとも）は丸ごとグレー
+           アウトし、案内文言を重ねる。stream-check-window.jsのapplyPremiumLockUiStates()で
+           #stream-check-content-wrapへpro-content-lockedをトグルする。 -->
+      <div id="stream-check-content-wrap">
       <div class="stream-check-tab-group" id="stream-check-tab-group">
         <button type="button" class="stream-check-tab-btn active" data-tab="live">配信中一覧</button>
         <button type="button" class="stream-check-tab-btn" data-tab="targets">自動追加</button>
@@ -178,6 +182,8 @@
             </p>
           </div>
         </main>
+      </div>
+      <div id="stream-check-lock-overlay" class="pro-lock-overlay hidden">🔒 有料会員限定機能です</div>
       </div>
     </div>
 

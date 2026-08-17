@@ -1,0 +1,68 @@
+/*
+ * アクティブタイルのメタ情報帯（2026-08-09新設）の見た目。
+ * src/renderer/style.cssの.tile-info-barと揃えてある（同一の背景色・文字色・フォントサイズ）。
+ * このBrowserView自体がバーの矩形そのものなので、position指定は不要（bodyいっぱいに広げるだけ）。
+ * setBackgroundColor('#00000000')（main.js側）と合わせ、html/bodyの背景も透明にしておく
+ * （このバー自体の背景はrgba()で半透明の黒を敷く。周囲は完全透明のまま）。
+ */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, 'Segoe UI', 'Hiragino Kaku Gothic ProN', sans-serif;
+}
+
+.active-info-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  background: rgba(20, 20, 24, 0.85);
+  color: #d7e6ff;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: ns-resize;
+}
+
+.active-info-bar-name {
+  flex: none;
+  font-weight: 600;
+  color: #efeff1;
+}
+
+.active-info-bar-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #b9c6da;
+}
+
+.active-info-bar-category {
+  flex: none;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #9ad1c7;
+}
+
+.active-info-bar-category:empty {
+  display: none;
+}
+
+.active-info-bar-stats {
+  flex: none;
+  color: #d7e6ff;
+}

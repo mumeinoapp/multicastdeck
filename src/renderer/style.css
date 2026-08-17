@@ -138,16 +138,73 @@ body {
   background: #3a3a42;
 }
 
-/* #6対応: 通知タブの一覧は件数が増えると縦に長くなりうるためスクロール化する。
+/* #6対応/通知タブ刷新(2026-08-09): 表示上限5件、それを超える分はスクロールで閲覧する
+   （保存件数自体もmain.js側で5件に制限済み）。1行あたり約52px想定で5件分+αの高さに調整。
    項目は配信開始日時付きの長めのテキストになるためnowrap解除。 */
 #notifications-menu-dropdown {
-  max-height: 320px;
+  max-height: 270px;
   overflow-y: auto;
 }
 
 #notifications-menu-dropdown .menu-bar-dropdown-item {
   white-space: normal;
   max-width: 320px;
+}
+
+/* 通知タブ刷新(2026-08-09): 通知1件の行（アイコンバッジ＋テキスト）。
+   「(Twitch)」等のサイト名テキスト表記を撤廃し、代わりに左側にサイトアイコンバッジを表示する。 */
+.notification-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.notif-platform-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.notif-platform-badge.twitch {
+  color: #a970ff;
+}
+
+.notif-platform-badge.kick {
+  color: #53fc18;
+  font-weight: 700;
+}
+
+.notif-platform-badge.youtube {
+  color: #ff0000;
+}
+
+.notif-item-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* クリックでメイン画面へ追加できるが、既に追加済みの通知は薄く表示しクリック不可にする
+   （stream-check-window.cssの追加済み表示と同じ考え方）。 */
+.notification-item.already-added {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.notification-item.already-added:hover {
+  background: none;
+}
+
+/* 通知タブ刷新(2026-08-09): YouTube通知対象リストの管理行（隠れたDOM本体側。実際に表示される
+   のはfloating-dropdown.css側だが、既存の複製パターン（#app-menu-root.wrap-rows等）に合わせて
+   最低限のレイアウトだけ揃えておく）。 */
+.youtube-target-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.youtube-target-add {
+  cursor: default;
 }
 
 /* コンテンツを上詰めにし、下の境界線と被らないよう下側にだけ余白を残す
@@ -278,6 +335,38 @@ body {
 .action-btn.pro-btn.locked::before,
 .chat-integration-mode-switch button.locked::before {
   content: '🔒 ';
+}
+
+/* 依頼#33: Pro機能を無料会員でも開けるようにしつつ、中身は丸ごとグレーアウト+
+   中央に案内文言を出す共通クラス。対象コンテナに.pro-content-lockedを付け、
+   内部に.pro-lock-overlayを1つ置く。 */
+.pro-content-locked {
+  position: relative;
+}
+
+.pro-content-locked > *:not(.pro-lock-overlay) {
+  filter: grayscale(1);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.pro-lock-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.pro-lock-overlay.hidden {
+  display: none;
 }
 
 /* 右端固定クラスタ（ログイン画面を閉じる・連携をキャンセル・音量）。並び替え対象外で常に右端、縦3段固定
@@ -457,10 +546,13 @@ button:hover:not(:disabled) {
   overflow: hidden;
   white-space: nowrap;
   /* streamViewのbounds縮小で生まれた隙間に重なるこの帯自体がBrowserViewの外側になるため、
-     ここを掴んでのタイル移動/リサイズ（下端リサイズ）をrenderer.js側で処理できるよう
-     マウスイベントを受け取る（クリック透過にしない）。cursorはrenderer.jsがJSで動的に変える。 */
+     ここを掴んでのタイルリサイズ（下端・斜め）をrenderer.js側で処理できるようマウスイベントを
+     受け取る（クリック透過にしない）。2026-08-09変更（実機報告対応）:
+     カーソルが全方位矢印(move)に見えてリサイズ方向が分かりにくいとの指摘を受け、このバーは
+     移動を廃止しリサイズ専用にした（移動は配信映像側の中央ドラッグで引き続き可能）。
+     cursorはrenderer.jsがJSで動的に変える（既定値はns-resize、左右端付近は斜め）。 */
   pointer-events: auto;
-  cursor: move;
+  cursor: ns-resize;
 }
 
 .tile-info-bar .tile-info-bar-name {
@@ -627,6 +719,7 @@ button:hover:not(:disabled) {
 
 .help-tab-content h3 {
   margin-top: 0;
+  margin-bottom: 6px;
   font-size: 16px;
 }
 
@@ -678,6 +771,32 @@ html.centered-modal .modal-content {
    実機報告）。見出しは常にパネルの一番上に来るため、上側の既定マージンだけ0にリセットする。 */
 .modal-content h2 {
   margin-top: 0;
+}
+
+/* 2026-08-17追加: 設定/ザッピング/Dropsパネル（いずれも.modal-content内でh2をパネル見出し・
+   h3をセクション見出しに使う構成）で、ブラウザ既定のh2/h3マージン（約19〜20px）が積み重なり、
+   見出しの上下の余白が間延びして見える実機報告への対応。.help-tab-content h3は独自のマージン
+   指定（margin-top:0、上のスタイル参照）があるため、汎用の.modal-content h3ではなく
+   影響範囲をこの3パネルのIDに絞って上書きする。
+   2026-08-17追記: help/welcome/premium-locked/feedback/pro-authの5モーダル
+   （overlay-panel/index.htmlでこのstyle.cssを共有読み込みしている）も同じ.modal-content
+   パターンだが、h2のmargin-bottomがこの3パネル限定で未対応のまま残っていたため対象に追加。 */
+#settings-modal h2,
+#zapping-modal h2,
+#drops-hub-modal h2,
+#help-modal h2,
+#welcome-modal h2,
+#premium-locked-modal h2,
+#feedback-modal h2,
+#pro-auth-modal h2 {
+  margin-bottom: 10px;
+}
+
+#settings-modal h3,
+#zapping-modal h3,
+#drops-hub-modal h3 {
+  margin-top: 10px;
+  margin-bottom: 6px;
 }
 
 .modal-content li {
@@ -776,6 +895,23 @@ html.centered-modal .modal-content {
 .panel-header button {
   background: transparent;
   font-size: 18px;
+}
+
+/* 2026-08-17追加: .panel-headerはflex行だが、中のh3自体にブラウザ既定のmargin（約19px、
+   top/bottom）が残っており、flexは子要素のmarginを消さないためheaderの高さがh3の上下
+   マージン分ふくらみ、見出し上下に無駄な余白が生まれていた（スタンプ/共有パネル実機報告）。
+   align-items:centerでの縦中央揃えはflex側の配置で完結しているため、margin:0にしても
+   見た目のセンタリングは崩れない。 */
+#emotes-panel .panel-header h3,
+#layout-share-panel .panel-header h3 {
+  margin: 0;
+}
+
+/* h4用の全般リセットが既存に無く、既定マージン（約21px、1.33em）がそのまま残って
+   お気に入り/取得結果見出しの上下が間延びして見えるため、既存の設定/ザッピング等パネルの
+   h3と同じ比率(10px/6px)に揃える。 */
+#emotes-panel h4 {
+  margin: 10px 0 6px;
 }
 
 .emote-grid {
@@ -916,6 +1052,66 @@ html.centered-modal .modal-content {
   margin: 0;
   width: 16px !important;
   height: 16px !important;
+}
+
+/* ---- 依頼#31: 配信メタ情報バーのON/OFFスイッチ（2026-08-17新設） ----
+   アプリ内に既存のtrack+knob型スイッチが無かったため新規に作る。ネイティブ<input
+   type="checkbox">をappearance:noneでトラック形状に変え、::afterで丸いノブを重ねる方式
+   （完全自作のdiv+JSトグルにはしない。checkedの状態管理・キーボード操作はcheckbox本来の
+   ものをそのまま使える）。.checkbox-row(チェックボックス+ラベル、四角い見た目)とは別クラスの
+   ため、既存の.modal-content .checkbox-row向けルールとは衝突しない。 */
+.modal-content .switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #efeff1;
+  cursor: pointer;
+}
+
+/* `.modal-content input { width: 100%; }` の詳細度に勝つよう明示的にサイズを固定する
+   （checkbox-rowと同じ既知の落とし穴）。 */
+.modal-content .switch-row input.switch-input {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 34px !important;
+  height: 18px !important;
+  margin: 0;
+  padding: 0;
+  border-radius: 999px;
+  background: #3a3a45;
+  border: 1px solid rgba(79, 140, 255, 0.3);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.modal-content .switch-row input.switch-input::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #efeff1;
+  transition: transform 0.15s ease;
+}
+
+.modal-content .switch-row input.switch-input:checked {
+  background: linear-gradient(90deg, #4f8cff, #22d3ee);
+  border-color: transparent;
+}
+
+.modal-content .switch-row input.switch-input:checked::after {
+  transform: translateX(16px);
+}
+
+.modal-content .switch-row input.switch-input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.35);
 }
 
 /* 「上限タイル数」等、<label>を使わずインラインの見出しとして使う小さいテキスト
@@ -1207,6 +1403,114 @@ html.centered-modal .modal-content {
   box-sizing: border-box;
 }
 
+/* 2026-08-09追加: 「チャット統合」の文言をワード検索欄に置き換え、歯車（設定）ボタンを追加。
+   既存の高さ40px・box-sizingはそのまま流用し、main.js側のCHAT_INTEGRATION_TOP_OFFSETに
+   影響しないようにしている。 */
+.chat-integration-header {
+  gap: 6px;
+}
+
+.chat-integration-icon {
+  flex-shrink: 0;
+  font-size: 15px;
+  opacity: 0.85;
+}
+
+.chat-integration-search-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #26262e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0 4px 0 8px;
+  height: 26px;
+}
+
+.chat-integration-search-wrap:focus-within {
+  border-color: var(--brand-blue, #4f8cff);
+}
+
+.chat-integration-search-wrap input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: #e4e4e7;
+  font-size: 12px;
+  padding: 0;
+  height: 100%;
+}
+
+.chat-integration-search-wrap input:focus {
+  outline: none;
+}
+
+.chat-integration-search-count {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: #a1a1aa;
+  white-space: nowrap;
+}
+
+.chat-integration-search-count.hidden { display: none; }
+
+.chat-integration-search-clear-btn {
+  flex-shrink: 0;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #a1a1aa;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.chat-integration-search-clear-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.chat-integration-search-clear-btn.hidden { display: none; }
+
+.chat-integration-settings-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: #a1a1aa;
+  font-size: 15px;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 6px;
+}
+
+.chat-integration-settings-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+/* 検索でヒットした語（一時的な検索クエリ）。目立つ黄色背景。 */
+.chat-integration-timeline mark.chat-search-hit {
+  background: #ffd166;
+  color: #1a1a1e;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+/* 常時検知ワード（設定で登録した単語）。検索中の語と区別できるよう別の配色にする。
+   検索クエリと常時検知ワードの両方に一致した場合はDOM構造上、検索側が内側に来て
+   検索色が優先表示される（applyWordHighlights呼び出し順、renderer.js参照）。 */
+.chat-integration-timeline mark.chat-watch-hit {
+  background: rgba(255, 209, 102, 0.28);
+  color: #ffe08a;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
 .chat-integration-mode-switch {
   height: 36px;
   flex-shrink: 0;
@@ -1339,10 +1643,16 @@ html.centered-modal .modal-content {
   word-break: break-word;
 }
 
-.chat-integration-timeline .chat-channel {
-  color: #adadb8;
-  font-size: 12px;
+/* 項目32: 統合チャットのチャンネル名テキストをアイコン画像に置き換え。
+   チャンネル名はtitle/alt属性としてホバー時に確認できる形で残す。 */
+.chat-integration-timeline .chat-channel-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: middle;
   margin-right: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
 .chat-integration-timeline .chat-user {
@@ -1537,8 +1847,11 @@ html.centered-modal .modal-content {
    ネイティブ<select>のキーボード操作・アクセシビリティ・OSネイティブなポップアップ位置決めは
    維持しつつ、appearance:noneと二重グラデーションの矢印でブランドカラーの見た目に変更する
    （完全自作のdiv+ulドロップダウンにはしない。他のselect(emotes/zapping/pro-checkout/
-   comment-font)は今回のスコープ外のため変更しない）。 */
-#channel-platform-select {
+   comment-font)は今回のスコープ外のため変更しない）。
+   ※依頼#29/#30で対象を拡張済み（下記コメント参照）。 */
+#channel-platform-select,
+#comment-font-select,
+#zapping-platform-select {
   appearance: none;
   -webkit-appearance: none;
   background-color: #23232b;
@@ -1559,15 +1872,35 @@ html.centered-modal .modal-content {
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-#channel-platform-select:hover {
+#channel-platform-select:hover,
+#comment-font-select:hover,
+#zapping-platform-select:hover {
   border-color: var(--brand-blue);
 }
 
-#channel-platform-select:focus {
+#channel-platform-select:focus,
+#comment-font-select:focus,
+#zapping-platform-select:focus {
   outline: none;
   border-color: var(--brand-cyan);
   box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.25);
 }
+
+/* ---- 依頼#29: 設定パネルのフォントメニューのオリジナルUI化（2026-08-17） ----
+   comment-font-select（設定パネルの「コメントのフォント」選択、index.html参照）限定で、
+   上の#channel-platform-selectと矢印デザイン自体は共有しつつ、.modal-content内で
+   input要素と横幅を揃えるため個別にwidth:100%を追加する（#channel-platform-selectは
+   チャンネル追加欄のインライン要素のためwidth:100%は付与しない）。他のselect
+   (emotes/zapping/pro-checkout)は今回もスコープ外のため変更しない。 */
+#comment-font-select {
+  width: 100%;
+}
+
+/* ---- 依頼#30: ザッピング対象メニューのオリジナルUI化（2026-08-17） ----
+   zapping-platform-select（ザッピングモーダルの「対象」選択、index.html参照）限定。
+   `.group`（field-label + selectのflex横並び、align-items:center）内に置かれているため、
+   #channel-platform-selectと同様にwidth:100%は付与せずコンテンツ幅のまま揃える。
+   pro-checkoutのselectは今回もスコープ外のため変更しない。 */
 
 /* ---- 依頼#10: 縦スクロールバーのオリジナルUI化（2026-08-07） ----
    横スクロールの#channel-chips/.chat-integration-tabsは既にこのファイル前半でブランド

@@ -67,4 +67,11 @@ contextBridge.exposeInMainWorld('streamCheckApi', {
   // のautoArrangeと完全に同じIPCチャンネル・引数形式（{selection, chatVisible}）をそのまま再利用する
   // （main.js側のapplyLayoutWindowArrangeは呼び出し元ウィンドウを区別しない汎用実装のため）。
   layoutAutoArrange: (payload) => ipcRenderer.invoke('layout-window:auto-arrange', payload),
+
+  // 依頼#33追加: このウィンドウ自体はメインウィンドウのpremiumUnlocked変数を直接参照できないため、
+  // メインウィンドウのpreload.jsと同じチャンネル（app:get-premium-unlocked / premium:changed）を
+  // そのまま再利用して取得する（main.js側のnotifyRendererがstreamCheckWindowにもこの通知を
+  // 中継するよう対応済み。OVERLAY_PANEL_FORWARDED_CHANNELS参照）。
+  getPremiumUnlocked: () => ipcRenderer.invoke('app:get-premium-unlocked'),
+  onPremiumChanged: (cb) => ipcRenderer.on('premium:changed', (_e, value) => cb(value)),
 });

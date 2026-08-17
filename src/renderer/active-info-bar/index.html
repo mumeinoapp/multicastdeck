@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!--
+  アクティブタイルのメタ情報帯（2026-08-09新設）。main.jsのensureActiveInfoBarView()が
+  loadFileで読み込む、常に他タイルより前面に来る小さな透明BrowserViewの中身。
+  中身・見た目は通常のタイル情報帯（src/renderer/index.htmlの#tile-info-bars内、
+  .tile-info-bar）とほぼ同じだが、このBrowserView自体が「そのタイルのメタ情報帯の矩形」と
+  完全に一致するようmain.js側でbounds設定されるため、中身はビュー全体を埋める1個のバーのみ。
+-->
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+    <title>active-info-bar</title>
+    <link rel="stylesheet" href="active-info-bar.css" />
+  </head>
+  <body>
+    <div id="bar" class="active-info-bar">
+      <span class="active-info-bar-name" id="bar-name"></span>
+      <span class="active-info-bar-title" id="bar-title"></span>
+      <span class="active-info-bar-category" id="bar-category"></span>
+      <span class="active-info-bar-stats" id="bar-stats"></span>
+    </div>
+    <script src="active-info-bar.js"></script>
+  </body>
+</html>

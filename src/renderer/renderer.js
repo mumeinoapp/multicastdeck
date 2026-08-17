@@ -39,6 +39,13 @@ function applyPremiumLockUiStates() {
   // 引き続きPro限定（元は配信チェックのPro機能内にあったため）。ロック中は「追加」ボタンに
   // 🔒表示を出す（実際のクリック制御はdropsAutoAddBtn/removeボタンのハンドラ側で行う）。
   document.getElementById('drops-auto-add-btn')?.classList.toggle('locked', !premiumUnlocked);
+  // 依頼#33: Pro機能は無料会員でも開けるが、中身は丸ごとグレーアウト+案内文言を表示する。
+  document.getElementById('zapping-body')?.classList.toggle('pro-content-locked', !premiumUnlocked);
+  document.getElementById('zapping-lock-overlay')?.classList.toggle('hidden', premiumUnlocked);
+  document.getElementById('drops-auto-section')?.classList.toggle('pro-content-locked', !premiumUnlocked);
+  document.getElementById('drops-auto-lock-overlay')?.classList.toggle('hidden', premiumUnlocked);
+  document.getElementById('chat-integration-timeline-wrap')?.classList.toggle('pro-content-locked', !premiumUnlocked);
+  document.getElementById('chat-integration-timeline-lock-overlay')?.classList.toggle('hidden', premiumUnlocked);
 }
 
 // centered化（2026-08-07）に伴う外側クリック閉じ対応で追加。openOverlayPanelSafe()を
@@ -260,7 +267,7 @@ window.api.onTileBarsVisible((visible) => {
   tileInfoBarsContainer.classList.toggle('bars-hidden', !visible);
 });
 
-// ---- タイル情報帯を掴んでのドラッグ移動／下端リサイズ ----
+// ---- タイル情報帯を掴んでの下端リサイズ ----
 // tile-info-bar はstreamViewのbounds縮小で生まれた隙間に重なるホストウィンドウ側のHTMLで、
 // BrowserView本体（tileInteractionPreload.jsがmousedown等を検知）の外側にある。
 // 従来はこの帯にドラッグ検知が一切配線されておらず、streamViewの下端（従来はここがドラッグの
@@ -268,14 +275,40 @@ window.api.onTileBarsVisible((visible) => {
 // 開始しない、または開始直後にポインタがBrowserView外（＝この帯の上）へ抜けてmousemoveが
 // 届かなくなり即座に外れる、という不具合が起きていた。BrowserView側と同じ
 // tile-interaction:start/move/end プロトコルをホストウィンドウ側からも発行することで解消する。
-const TILE_INFO_BAR_RESIZE_EDGE_PX = 6;
+//
+// 2026-08-09変更（実機報告対応）: 従来はバー中央が「移動」・下端6pxのみ「垂直リサイズ」だったが、
+// 実機で「カーソルが全方位矢印(move)のように見えてリサイズできる方向が分かりにくい」との
+// 指摘を受けた。タイルの移動自体は配信映像側（BrowserViewの中央、既存のtileInteractionPreload.js
+// 側のmoveゾーン）からでも従来通り可能なため、このバーは「移動」を廃止し、常にリサイズ専用
+// （左端=sw／右端=se／それ以外=s）として動作を単純化・明確化した。
+// 2026-08-09追加（実機報告対応）: streamView側のbottom辺を無効化した結果（edgeConfigFor参照）、
+// 右斜め下・左斜め下方向のリサイズができなくなった（streamView側はnearBottomが常にfalseになり、
+// 'se'/'sw'の組み合わせが作れなくなったため）。tile-info-bar側でバーの左右端付近を掴んだ場合も
+// 斜めリサイズ（sw/se）として扱うことで復活させる。streamView側のEDGE_PX(10px)よりやや広めに
+// 取り、「タイル全体の角」を掴んだ操作感に近づける。
+const TILE_INFO_BAR_CORNER_EDGE_PX = 14;
 let infoBarDragging = false;
 let infoBarRafPending = false;
 let infoBarLatestPoint = null;
 
-function infoBarResizeZone(el, clientY) {
+/** dir文字列('s'/'sw'/'se')からCSSカーソル名へ変換。tileInteractionPreload.jsのcursorForZoneと同じ対応。 */
+function infoBarCursorForZone(dir) {
+  if (dir === 'sw' || dir === 'ne') return 'nesw-resize';
+  if (dir === 'se' || dir === 'nw') return 'nwse-resize';
+  return 'ns-resize'; // 'move'廃止によりバー上では常にいずれかのリサイズカーソルになる
+}
+
+/**
+ * バー上のどこを掴んでも必ずリサイズ方向('sw'/'se'/'s')のいずれかを返す（'move'は返さない、
+ * 上部コメント参照）。左右TILE_INFO_BAR_CORNER_EDGE_PX(14px)以内は斜め、それ以外は垂直。
+ */
+function infoBarResizeZone(el, clientX) {
   const rect = el.getBoundingClientRect();
-  return clientY >= rect.bottom - TILE_INFO_BAR_RESIZE_EDGE_PX ? 's' : '';
+  const nearLeft = clientX <= rect.left + TILE_INFO_BAR_CORNER_EDGE_PX;
+  const nearRight = clientX >= rect.right - TILE_INFO_BAR_CORNER_EDGE_PX;
+  if (nearLeft) return 'sw';
+  if (nearRight) return 'se';
+  return 's';
 }
 
 tileInfoBarsContainer.addEventListener('mousedown', (e) => {
@@ -284,13 +317,13 @@ tileInfoBarsContainer.addEventListener('mousedown', (e) => {
   if (!el) return;
   const channel = el.dataset.name;
   if (!channel) return;
-  const dir = infoBarResizeZone(el, e.clientY);
+  const dir = infoBarResizeZone(el, e.clientX);
   infoBarDragging = true;
-  document.body.style.cursor = dir ? 'ns-resize' : 'move';
+  document.body.style.cursor = infoBarCursorForZone(dir);
   window.api.startTileInteraction({
     channel,
     origin: 'stream',
-    type: dir ? 'resize' : 'move',
+    type: 'resize',
     dir,
     screenX: e.screenX,
     screenY: e.screenY,
@@ -300,7 +333,15 @@ tileInfoBarsContainer.addEventListener('mousedown', (e) => {
 tileInfoBarsContainer.addEventListener('mousemove', (e) => {
   if (infoBarDragging) return;
   const el = e.target.closest('.tile-info-bar');
-  document.body.style.cursor = el && infoBarResizeZone(el, e.clientY) ? 'ns-resize' : '';
+  document.body.style.cursor = el ? infoBarCursorForZone(infoBarResizeZone(el, e.clientX)) : '';
+});
+
+// 2026-08-09追加（実機報告対応）: ポインタがtile-info-barの上でカーソル形状(ns-resize等)を
+// 変えた直後、ドラッグを開始せずにそのままバー外（他タイルの隙間・ヘッダー等のホストHTML領域）へ
+// 抜けると、mousemoveがこのコンテナに二度と届かず、body.style.cursorが直前の形状のまま
+// 固着して見える不具合があった。バーからポインタが離れた時点で明示的に元へ戻す。
+tileInfoBarsContainer.addEventListener('mouseleave', () => {
+  if (!infoBarDragging) document.body.style.cursor = '';
 });
 
 window.addEventListener('mousemove', (e) => {
@@ -329,9 +370,21 @@ window.addEventListener('blur', endInfoBarDrag);
 
 /**
  * streamMetaCache（チップと共有）を使って、タイル情報帯の表示内容を更新する。
- * YouTubeはfetchAllStreamMeta非対応（既存の意図的な仕様）のため配信者名のみ表示し、
- * タイトル・視聴者数・経過時間の欄は空のままにする（「取得不可」等のノイズ文言は出さない）。
+ * 2026-08-09変更: YouTubeも他プラットフォームと同じ経路で表示するよう変更（元依頼: タイトル・
+ * カテゴリ・配信時間が出ないなら撤去、との相談を受け、実際にはfetchAllStreamMeta側で
+ * タイトル/カテゴリ/開始時刻が無料取得できると判明したため表示を追加）。ただしYouTubeは
+ * 視聴者数だけ無料APIが無く取得できないため、info.viewerCountが数値で無い場合は
+ * 👁の項目自体を出さず、⏱（経過時間）のみ表示する。
  */
+// 2026-08-09追加: 今アクティブなタイル（active-info-bar、専用BrowserViewで最前面化される側）の
+// チャンネル名。main.js側（updateActiveInfoBar）から通知される。このタイルの分だけ、下の
+// applyStreamMetaToTileBars()が計算した表示内容をpushActiveInfoBarContentで送り返す
+// （fetchAllStreamMeta()をactive-info-bar側で二重に叩かない設計、詳細はpreload.js/main.js参照）。
+let activeInfoBarChannel = null;
+window.api.onActiveInfoBarChannelChanged((channel) => {
+  activeInfoBarChannel = channel;
+});
+
 function applyStreamMetaToTileBars() {
   const meta = streamMetaCache;
   tileBarEls.forEach((el, channel) => {
@@ -347,29 +400,37 @@ function applyStreamMetaToTileBars() {
     const statsEl = el.querySelector('.tile-info-bar-stats');
     nameEl.textContent = channel;
 
-    const isYoutube = currentChannelPlatforms[channel] === 'youtube';
-    if (isYoutube) {
-      titleEl.textContent = '';
-      categoryEl.textContent = '';
-      statsEl.textContent = '';
-      return;
-    }
-
     const info = meta[channel];
     if (!info) {
       titleEl.textContent = '';
       categoryEl.textContent = '';
       statsEl.textContent = '';
+      if (channel === activeInfoBarChannel) {
+        window.api.pushActiveInfoBarContent({ name: channel, title: '', category: '', stats: '' });
+      }
       return;
     }
-    const compactViewers =
-      info.viewerCount >= 10000
+    const hasViewerCount = typeof info.viewerCount === 'number' && Number.isFinite(info.viewerCount);
+    const compactViewers = hasViewerCount
+      ? info.viewerCount >= 10000
         ? `${(info.viewerCount / 10000).toFixed(1)}万`
-        : info.viewerCount.toLocaleString();
+        : info.viewerCount.toLocaleString()
+      : '';
     const elapsed = formatElapsedStreamTime(info.startedAt);
+    const statsParts = [];
+    if (hasViewerCount) statsParts.push(`👁${compactViewers}`);
+    if (elapsed) statsParts.push(`⏱${elapsed}`);
     titleEl.textContent = info.title || '';
     categoryEl.textContent = info.gameName || '';
-    statsEl.textContent = `👁${compactViewers}${elapsed ? ` ・⏱${elapsed}` : ''}`;
+    statsEl.textContent = statsParts.join(' ・');
+    if (channel === activeInfoBarChannel) {
+      window.api.pushActiveInfoBarContent({
+        name: channel,
+        title: titleEl.textContent,
+        category: categoryEl.textContent,
+        stats: statsEl.textContent,
+      });
+    }
   });
 }
 
@@ -826,6 +887,7 @@ const settingsCloseBtn = document.getElementById('settings-close-btn');
 const parentDomainInput = document.getElementById('parent-domain-input');
 const layoutColumnsInput = document.getElementById('layout-columns-input');
 const commentFontSelect = document.getElementById('comment-font-select');
+const tileInfoBarToggle = document.getElementById('tile-info-bar-toggle');
 const helixClientIdInput = document.getElementById('helix-client-id-input');
 const helixClientSecretInput = document.getElementById('helix-client-secret-input');
 const youtubeApiKeyInput = document.getElementById('youtube-api-key-input');
@@ -845,6 +907,7 @@ settingsOpenBtn.addEventListener('click', async () => {
   parentDomainInput.value = s.parentDomain;
   layoutColumnsInput.value = s.layoutColumns;
   commentFontSelect.value = s.commentFontFamily || '';
+  tileInfoBarToggle.checked = s.tileInfoBarEnabled !== false;
   helixClientIdInput.value = s.helixClientId;
   helixClientSecretInput.value = s.helixClientSecret;
   youtubeApiKeyInput.value = s.youtubeDataApiKey || '';
@@ -867,6 +930,7 @@ settingsSaveBtn.addEventListener('click', async () => {
     parentDomain: parentDomainInput.value.trim() || 'localhost',
     layoutColumns: Number(layoutColumnsInput.value) || 0,
     commentFontFamily: commentFontSelect.value,
+    tileInfoBarEnabled: tileInfoBarToggle.checked,
     helixClientId: helixClientIdInput.value.trim(),
     helixClientSecret: helixClientSecretInput.value.trim(),
     youtubeDataApiKey: youtubeApiKeyInput.value.trim(),
@@ -1216,6 +1280,10 @@ dropsAutoAddBtn.addEventListener('click', async () => {
 
 const dropsAutoGameInputHistory = attachInputHistory(dropsAutoGameInput, 'dropsAutoGameName');
 
+document.getElementById('drops-auto-lock-overlay')?.addEventListener('click', () => {
+  showPremiumLockedModal();
+});
+
 window.api.onDropsAutoError(({ gameName, message }) => {
   dropsAutoStatus.textContent = `「${gameName}」の自動追加チェックに失敗しました: ${message}`;
 });
@@ -1372,7 +1440,8 @@ async function refreshZappingPanel() {
 }
 
 zappingBtn.addEventListener('click', async () => {
-  if (!premiumUnlocked) { showPremiumLockedModal(); return; }
+  // 依頼#33: 無料会員でもパネル自体は開けるようにし、中身のロック表示（applyPremiumLockUiStates）
+  // でイメージだけ確認できるようにする。実際の開始はzappingStartBtn側でガードする。
   if (!zappingModal.classList.contains('hidden')) {
     zappingCloseBtn.click();
     return;
@@ -1380,6 +1449,10 @@ zappingBtn.addEventListener('click', async () => {
   await window.api.openSidePanel('zapping', 340);
   zappingModal.classList.remove('hidden');
   refreshZappingPanel();
+});
+
+document.getElementById('zapping-lock-overlay')?.addEventListener('click', () => {
+  showPremiumLockedModal();
 });
 
 zappingCloseBtn.addEventListener('click', async () => {
@@ -1398,6 +1471,9 @@ function collectZappingFilters() {
 }
 
 zappingStartBtn.addEventListener('click', async () => {
+  // オーバーレイのpointer-events:noneでロック中は通常到達しないが、DevTools等からの
+  // 直接呼び出しに備えた保険のガード。
+  if (!premiumUnlocked) { showPremiumLockedModal(); return; }
   zappingStatus.textContent = '開始しています...';
   const result = await window.api.startZapping(collectZappingFilters());
   setZappingButtonsState(result.active);
@@ -1444,7 +1520,8 @@ window.api.onZappingError(({ message }) => {
 const unifiedFeedBtn = document.getElementById('unified-feed-btn');
 
 unifiedFeedBtn.addEventListener('click', async () => {
-  if (!premiumUnlocked) { showPremiumLockedModal(); return; }
+  // 依頼#33: 無料会員でもウィンドウ自体は開けるようにし、中身のロック表示は
+  // stream-check-window.js側（applyPremiumLockUi）で行う。
   await window.api.openStreamCheckWindow();
 });
 
@@ -1580,12 +1657,37 @@ const chatIntegrationJumpBottomBtn = document.getElementById('chat-integration-j
 const chatIntegrationSendRow = document.getElementById('chat-integration-send-row');
 const chatIntegrationSendInput = document.getElementById('chat-integration-send-input');
 const chatIntegrationSendBtn = document.getElementById('chat-integration-send-btn');
+// 2026-08-09追加: ワード検索欄・常時検知ワード・設定ウィンドウの歯車アイコン
+const chatIntegrationSearchInput = document.getElementById('chat-integration-search-input');
+const chatIntegrationSearchClearBtn = document.getElementById('chat-integration-search-clear-btn');
+const chatIntegrationSearchCountEl = document.getElementById('chat-integration-search-count');
+const chatIntegrationSettingsBtn = document.getElementById('chat-integration-settings-btn');
+
+// 全タブ統合のチャンネルタブ列(#chat-integration-tabs、style.css .chat-integration-tabsで
+// overflow-x:autoの横スクロールバー付き＝項目10で対応済み)は、スクロールバーを直接ドラッグ
+// しないとスクロールできず不便との指摘（2026-08-10）を受け、マウスホイール（縦方向の
+// deltaY。トラックパッド等の横方向deltaXがあればそちらを優先）でも横スクロールできるようにする。
+// passive:falseでpreventDefaultし、縦スクロールとして親要素へ伝播しないようにする。
+chatIntegrationTabs.addEventListener(
+  'wheel',
+  (e) => {
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (!delta) return;
+    e.preventDefault();
+    chatIntegrationTabs.scrollLeft += delta;
+  },
+  { passive: false },
+);
 
 let chatIntegrationMode = 'tab'; // 'tab' | 'timeline'
 let chatIntegrationSelectedChannel = null;
 // #7対応: { [channelName]: true } チャット統合パネル（主に全タブ統合＝timelineモード）の表示対象から
 // 除外中のチャンネル。renderChatIntegrationTabs()のたびにmain process側の永続化値で更新する。
 let chatIntegrationHiddenMap = {};
+// 2026-08-09追加: ワード検索の現在のクエリ（一時的、パネルを閉じても保持はするが永続化はしない）。
+let chatSearchQuery = '';
+// 2026-08-09追加: 常時検知ワード一覧（設定ウィンドウで登録、main process側で永続化）。
+let chatWatchWords = [];
 
 /**
  * @param {string} mode 'tab' | 'timeline'
@@ -1638,9 +1740,20 @@ function isChatTimelineNearBottom() {
 let chatTimelineFollowBottom = true;
 let isAutoScrollingChatTimeline = false;
 
+// 2026-08-09追加（元依頼: 「チャットを遡った時チャットの更新を止める設定」）:
+// chatScrollLockEnabled=trueかつ遡っている間(chatTimelineFollowBottom=false)は、新着メッセージを
+// DOMへ直接追加せずchatScrollLockBufferへ溜めておく（appendTimelineMessage参照）。最下部へ戻った
+// 時点でflushChatScrollLockBuffer()がまとめてDOMへ反映する。設定値はmain process側で永続化され、
+// 変更のたびに'chat-scroll-lock:changed'で通知される（下部のonChatScrollLockChanged参照）。
+let chatScrollLockEnabled = false;
+let chatScrollLockBuffer = [];
+
 /** タイムラインを最下部（最新のチャット表示位置）まで即座にスクロールし、ジャンプボタンを隠す */
 function scrollChatTimelineToBottom() {
   isAutoScrollingChatTimeline = true;
+  // 遡り中に溜めていたメッセージがあれば、実際にスクロールする前にDOMへ反映しておく
+  // （反映後に高さが変わるため、scrollTop = scrollHeight は反映後の値で行う必要がある）。
+  flushChatScrollLockBuffer();
   chatIntegrationTimeline.scrollTop = chatIntegrationTimeline.scrollHeight;
   chatTimelineFollowBottom = true;
   chatIntegrationJumpBottomBtn.classList.add('hidden');
@@ -1660,7 +1773,17 @@ chatIntegrationTimeline.addEventListener('scroll', () => {
   const nearBottom = isChatTimelineNearBottom();
   chatIntegrationJumpBottomBtn.classList.toggle('hidden', nearBottom);
   if (!isAutoScrollingChatTimeline) {
+    const wasFollowingBottom = chatTimelineFollowBottom;
     chatTimelineFollowBottom = nearBottom;
+    // ユーザー自身のスクロール操作で最下部に戻ってきた場合も、遡っている間に溜まっていた
+    // メッセージをここで反映する（「↓ 最新へ」ボタンのクリックを経由しないケースのため）。
+    // 2026-08-09修正: 以前はflushChatScrollLockBuffer()のみ呼んでいたが、それだと反映した
+    // 分だけ実際のコンテンツ下端が伸びてもscrollTopを合わせ直さないため、見た目は「最下部に
+    // 着いた」つもりでも実際には反映分だけ下に取りこぼしが残る（「↓最新へ」ボタンも
+    // 再表示されないため気づけない）ズレが起きていた。scrollChatTimelineToBottom()は内部で
+    // 同じflushChatScrollLockBuffer()を呼んだ上で確実に最下部までスナップし直すため、
+    // こちらに置き換えて完全に追いつかせる。
+    if (nearBottom && !wasFollowingBottom) scrollChatTimelineToBottom();
   }
 });
 chatIntegrationJumpBottomBtn.addEventListener('click', scrollChatTimelineToBottom);
@@ -1759,8 +1882,16 @@ chatIntegrationBtn.addEventListener('click', async () => {
   }
   await window.api.openSidePanel('chat-integration', 340);
   chatIntegrationPanel.classList.remove('hidden');
+  // 2026-08-09追加: 常時検知ワード・遡り中の自動更新停止設定を、パネルを開くたびに最新化する
+  // （設定ウィンドウを閉じたまま次回開いた時等でも、値がずれないようにするため）。
+  const [watchWords, scrollLock] = await Promise.all([
+    window.api.getChatWatchWords(),
+    window.api.getChatScrollLock(),
+  ]);
+  chatWatchWords = watchWords || [];
+  chatScrollLockEnabled = !!scrollLock;
   await renderChatIntegrationTabs();
-  if (chatIntegrationMode === 'timeline') {
+  if (chatIntegrationMode === 'timeline' && premiumUnlocked) {
     connectIrc();
     syncYoutubeChatWatch();
     connectKickPusher();
@@ -1782,19 +1913,26 @@ chatIntegrationModeTabBtn.addEventListener('click', async () => {
 });
 
 chatIntegrationModeTimelineBtn.addEventListener('click', async () => {
-  if (!premiumUnlocked) { showPremiumLockedModal(); return; }
+  // 依頼#33: 無料会員でも切替自体は行えるようにし、実際の接続（実データ取得）だけを
+  // premiumUnlockedでガードする。見た目のロック表示はapplyPremiumLockUiStatesが担う。
   if (chatIntegrationMode === 'timeline') return;
   await window.api.hideChatIntegrationTab();
   setChatIntegrationMode('timeline');
-  connectIrc();
-  syncYoutubeChatWatch();
-  connectKickPusher();
+  if (premiumUnlocked) {
+    connectIrc();
+    syncYoutubeChatWatch();
+    connectKickPusher();
+  }
+});
+
+document.getElementById('chat-integration-timeline-lock-overlay')?.addEventListener('click', () => {
+  showPremiumLockedModal();
 });
 
 function refreshChatIntegrationIfOpen() {
   if (chatIntegrationPanel.classList.contains('hidden')) return;
   renderChatIntegrationTabs();
-  if (chatIntegrationMode === 'timeline') {
+  if (chatIntegrationMode === 'timeline' && premiumUnlocked) {
     syncIrcChannels();
     syncYoutubeChatWatch();
     syncKickChatrooms();
@@ -1818,6 +1956,9 @@ function connectIrc() {
   if (ircSocket) return;
   chatIntegrationTimeline.innerHTML = '';
   chatIntegrationJumpBottomBtn.classList.add('hidden');
+  // 2026-08-09追加: 新規接続のたびに、前回セッション分の遡り中バッファが残っていればクリアする。
+  chatScrollLockBuffer = [];
+  updateChatScrollLockPendingBadge();
   ircJoinedChannels.clear();
   const nick = 'justinfan' + Math.floor(10000 + Math.random() * 89999);
   try {
@@ -2190,24 +2331,230 @@ function isChannelHiddenFromChatIntegration(channel) {
   return Object.keys(chatIntegrationHiddenMap).some((name) => name.toLowerCase() === lower);
 }
 
-function appendTimelineMessage({ channel, username, message, color, emotesTag, platform }) {
-  if (isChannelHiddenFromChatIntegration(channel)) return;
-  // 追加前の時点で「自動追従」中だったかどうかを見る（chatTimelineFollowBottom、スクロール
-  // イベントハンドラで維持している状態）。最下部にいた場合のみ新着メッセージに追従し、
-  // 少しでも上にスクロールして過去ログを読んでいる場合は追従させず「↓ 最新へ」ボタン側に誘導する。
-  const wasFollowingBottom = chatTimelineFollowBottom;
+// ---- 2026-08-09追加: ワード検索・常時検知ワードのハイライト表示 ----
+// 検索欄への一時入力(chatSearchQuery)と、設定ウィンドウで登録する常時検知ワード(chatWatchWords)の
+// 2種類を、それぞれ別のクラス(chat-search-hit/chat-watch-hit)の<mark>で強調表示する。
+// 絵文字<img>等のHTML構造は一切変更せず、テキストノードだけを対象にするため安全（buildEmoteAware
+// MessageHtml等が生成したHTMLを壊さない）。
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * containerの子孫テキストノードを走査し、wordsのいずれかにマッチする部分を<mark class="...">で
+ * 包む。既存のタグ（絵文字<img>等）には触れない。
+ */
+function applyWordHighlights(container, words, className) {
+  const escaped = (words || []).map((w) => escapeRegExp(w)).filter(Boolean);
+  if (!escaped.length) return;
+  const regex = new RegExp(`(${escaped.join('|')})`, 'gi');
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) textNodes.push(node);
+  textNodes.forEach((textNode) => {
+    const text = textNode.nodeValue;
+    regex.lastIndex = 0;
+    if (!regex.test(text)) return;
+    regex.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let lastIndex = 0;
+    let m;
+    while ((m = regex.exec(text))) {
+      if (m.index > lastIndex) frag.appendChild(document.createTextNode(text.slice(lastIndex, m.index)));
+      const mark = document.createElement('mark');
+      mark.className = className;
+      mark.textContent = m[0];
+      frag.appendChild(mark);
+      lastIndex = m.index + m[0].length;
+      if (m[0].length === 0) regex.lastIndex += 1; // 空マッチ無限ループの安全策（escaped側は空文字を除外済みのため通常は非到達）
+    }
+    if (lastIndex < text.length) frag.appendChild(document.createTextNode(text.slice(lastIndex)));
+    textNode.parentNode.replaceChild(frag, textNode);
+  });
+}
+
+/**
+ * 1行分の.chat-message-textへ、常時検知ワード→検索クエリの順でハイライトを適用し直す。
+ * 呼ぶたびに保存済みの元HTML(dataset.rawHtml、renderTimelineMessageLineで保存)から作り直すため、
+ * 検索クエリを打ち直しても前回分のハイライトが残る・重ね掛けされる、といったことが起きない。
+ */
+function applyChatHighlightsToElement(messageTextEl) {
+  if (!messageTextEl || messageTextEl.dataset.rawHtml === undefined) return;
+  messageTextEl.innerHTML = messageTextEl.dataset.rawHtml;
+  if (chatWatchWords.length) applyWordHighlights(messageTextEl, chatWatchWords, 'chat-watch-hit');
+  if (chatSearchQuery) applyWordHighlights(messageTextEl, [chatSearchQuery], 'chat-search-hit');
+}
+
+/** 検索クエリ・常時検知ワードが変わった時に、表示済みの全行へハイライトを再適用する。 */
+function reapplyAllChatHighlights() {
+  chatIntegrationTimeline.querySelectorAll('.chat-message-text').forEach((el) => applyChatHighlightsToElement(el));
+  updateChatSearchCount();
+}
+
+/** 検索欄の右にヒット件数を表示する（クエリが空の間は非表示）。 */
+function updateChatSearchCount() {
+  if (!chatSearchQuery) {
+    chatIntegrationSearchCountEl.classList.add('hidden');
+    chatIntegrationSearchCountEl.textContent = '';
+    return;
+  }
+  const hits = chatIntegrationTimeline.querySelectorAll('mark.chat-search-hit').length;
+  chatIntegrationSearchCountEl.textContent = `${hits}件`;
+  chatIntegrationSearchCountEl.classList.remove('hidden');
+}
+
+chatIntegrationSearchInput.addEventListener('input', () => {
+  chatSearchQuery = chatIntegrationSearchInput.value.trim();
+  chatIntegrationSearchClearBtn.classList.toggle('hidden', !chatSearchQuery);
+  reapplyAllChatHighlights();
+});
+chatIntegrationSearchClearBtn.addEventListener('click', () => {
+  chatIntegrationSearchInput.value = '';
+  chatSearchQuery = '';
+  chatIntegrationSearchClearBtn.classList.add('hidden');
+  reapplyAllChatHighlights();
+});
+chatIntegrationSettingsBtn.addEventListener('click', () => {
+  window.api.openChatSettingsWindow();
+});
+// 設定ウィンドウ（chat-settings-window.js）側での変更をこのパネルにも即座に反映する。
+window.api.onChatWatchWordsChanged((words) => {
+  chatWatchWords = words || [];
+  reapplyAllChatHighlights();
+});
+window.api.onChatScrollLockChanged((enabled) => {
+  chatScrollLockEnabled = !!enabled;
+  // 2026-08-09修正（実機報告: OFFにしても遡り中は反映されないままに見える）: 一時は
+  // 「遡り中は最下部に戻るまで反映しない」形にしていたが、これだとOFF操作が即座に効いた
+  // ように見えず分かりにくかった。renderTimelineMessageLine側の間引き時scrollTop補正
+  // （追従OFF時に削除分だけ差し引く）が入ったことで、遡り中に流し込んでも見ている位置が
+  // ずれなくなったため、位置に関わらず即座に反映する元の挙動に戻す。即座に反映すること自体が
+  // 時系列の前後逆転（後述のappendTimelineMessage側のバッファ継続条件）も防いでいる。
+  if (!chatScrollLockEnabled) flushChatScrollLockBuffer();
+});
+
+/** 「↓ 最新へ」ボタンの表示文言を更新する（遡り中に溜まっているメッセージ件数を添える）。 */
+function updateChatScrollLockPendingBadge() {
+  const count = chatScrollLockBuffer.length;
+  chatIntegrationJumpBottomBtn.textContent = count > 0 ? `↓ 最新へ (${count}件)` : '↓ 最新へ';
+}
+
+/** 遡り中に溜めていたメッセージを、順番通りにまとめてDOMへ反映する。 */
+function flushChatScrollLockBuffer() {
+  if (!chatScrollLockBuffer.length) return;
+  const buffered = chatScrollLockBuffer;
+  chatScrollLockBuffer = [];
+  buffered.forEach((payload) => renderTimelineMessageLine(payload));
+  updateChatScrollLockPendingBadge();
+}
+
+// 項目32: 統合チャットのチャンネル名テキスト表示をアイコン画像に置き換えるためのヘルパー群。
+// アバターURLはstreamMetaCache（チップ・タイル情報帯と共有、L441で60秒間隔ポーリング）から
+// 引く。まれにプロトコル相対URL（"//..."）で来ることがあるため正規化する
+// （stream-check-window.js等の既存実装と同じ対策）。
+function normalizeAvatarUrl(url) {
+  if (!url) return url;
+  return url.indexOf('//') === 0 ? `https:${url}` : url;
+}
+
+function getChannelAvatarUrl(channel) {
+  const meta = streamMetaCache && streamMetaCache[channel];
+  return (meta && normalizeAvatarUrl(meta.avatarUrl)) || null;
+}
+
+// 実アイコンが未取得（YouTubeは現状非対応/ポーリング前等）の場合のフォールバック。
+// チャンネル名からハッシュ値を決定的に算出し、常に同じチャンネルは同じ色・頭文字になるようにする
+// （同名ユーザーが複数チャンネルに投稿した際の見分けやすさのため、単一のプレースホルダー画像にはしない）。
+function buildChannelFallbackIconDataUri(channel) {
+  const name = String(channel || '?');
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  const hue = hash % 360;
+  const initial = escapeHtml(name.slice(0, 1).toUpperCase());
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">` +
+    `<circle cx="24" cy="24" r="24" fill="hsl(${hue},55%,42%)"/>` +
+    `<text x="24" y="24" text-anchor="middle" dominant-baseline="central" font-family="sans-serif" font-size="24" font-weight="600" fill="#fff">${initial}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+/**
+ * 1行分のDOM要素を作ってタイムラインへ追加する実処理（ハイライト適用・行数上限の間引きまで）。
+ * appendTimelineMessage（新着到着時の入口）とflushChatScrollLockBuffer（遡り中に溜めた分の
+ * まとめ反映）の両方から呼ばれる。スクロール位置の追従（scrollChatTimelineToBottom呼び出し）は
+ * 呼び出し元の責務とし、ここでは行わない（flush時に1件ごとスクロールし直すと無駄が多いため）。
+ */
+function renderTimelineMessageLine({ channel, username, message, color, emotesTag, platform }) {
   const line = document.createElement('div');
   line.className = 'chat-line';
   const messageHtml =
     platform === 'kick' ? buildKickEmoteAwareMessageHtml(message) : buildEmoteAwareMessageHtml(message, emotesTag);
-  line.innerHTML = `<span class="chat-channel">[${escapeHtml(channel)}]</span><span class="chat-user" style="color:${
+  const channelLabel = escapeHtml(channel);
+  const fallbackIconUri = buildChannelFallbackIconDataUri(channel);
+  line.innerHTML = `<img class="chat-channel-icon" src="${
+    getChannelAvatarUrl(channel) || fallbackIconUri
+  }" title="${channelLabel}" alt="${channelLabel}"><span class="chat-user" style="color:${
     color || '#9147ff'
   }">${escapeHtml(username)}</span>: <span class="chat-message-text">${messageHtml}</span>`;
+  const iconEl = line.querySelector('.chat-channel-icon');
+  if (iconEl) {
+    iconEl.addEventListener(
+      'error',
+      () => {
+        iconEl.src = fallbackIconUri;
+      },
+      { once: true }
+    );
+  }
   chatIntegrationTimeline.appendChild(line);
   hydrateClipCards(line);
-  while (chatIntegrationTimeline.children.length > CHAT_TIMELINE_MAX_LINES) {
-    chatIntegrationTimeline.removeChild(chatIntegrationTimeline.firstChild);
+  const messageTextEl = line.querySelector('.chat-message-text');
+  if (messageTextEl) {
+    // ハイライトで書き換える前の元HTMLを保存しておく（検索クエリ変更のたびにここから作り直す）。
+    messageTextEl.dataset.rawHtml = messageTextEl.innerHTML;
+    applyChatHighlightsToElement(messageTextEl);
   }
+  while (chatIntegrationTimeline.children.length > CHAT_TIMELINE_MAX_LINES) {
+    // 2026-08-09修正（スクロール逸脱調査）: 遡って過去ログを読んでいる最中（追従OFF）に
+    // 上限間引きが走ると、削除した行の高さぶんscrollHeightが縮み、何もしなければ見ている
+    // 位置が上にずれてしまう。scrollHeightの差分を実測し、その場でscrollTopから差し引く
+    // ことで見た目の位置を維持する（margin等を含めた実際の高さを取るため、offsetHeightでは
+    // なくscrollHeightの前後差分を使う）。追従中はこの直後にscrollChatTimelineToBottomで
+    // 最下部へ強制スナップされるため補正不要（かつ不要な計算を避ける）。
+    const scrollHeightBefore = chatTimelineFollowBottom ? 0 : chatIntegrationTimeline.scrollHeight;
+    chatIntegrationTimeline.removeChild(chatIntegrationTimeline.firstChild);
+    if (!chatTimelineFollowBottom) {
+      chatIntegrationTimeline.scrollTop -= scrollHeightBefore - chatIntegrationTimeline.scrollHeight;
+    }
+  }
+  return line;
+}
+
+function appendTimelineMessage(payload) {
+  if (isChannelHiddenFromChatIntegration(payload.channel)) return;
+  // 2026-08-09追加（元依頼: 「チャットを遡った時チャットの更新を止める設定」）: 設定ONかつ
+  // 遡っている間は、DOMへ直接追加せずバッファに溜めておく。最下部へ戻った時点でまとめて反映する
+  // （flushChatScrollLockBuffer、scrollChatTimelineToBottom・スクロールイベントハンドラから呼ばれる）。
+  // 2026-08-09修正: 以前は「バッファに未反映分が残っている間は設定OFF後もバッファ経由を
+  // 継続する」ようにして順序逆転を防いでいたが、OFF操作の効果が遡り中は反映されず分かり
+  // にくかった（実機報告）。OFFへの切替時にonChatScrollLockChanged側で即座に（位置に関わらず）
+  // flushするように変更したため、OFFになった時点でバッファは必ずその場で空になり、以降の
+  // 新着との間で追い越し（順序逆転）が起きる余地が無くなった。よって判定はchatScrollLockEnabled
+  // の現在値のみに戻す。
+  if (chatScrollLockEnabled && !chatTimelineFollowBottom) {
+    chatScrollLockBuffer.push(payload);
+    if (chatScrollLockBuffer.length > CHAT_TIMELINE_MAX_LINES) chatScrollLockBuffer.shift();
+    updateChatScrollLockPendingBadge();
+    return;
+  }
+  // 追加前の時点で「自動追従」中だったかどうかを見る（chatTimelineFollowBottom、スクロール
+  // イベントハンドラで維持している状態）。最下部にいた場合のみ新着メッセージに追従し、
+  // 少しでも上にスクロールして過去ログを読んでいる場合は追従させず「↓ 最新へ」ボタン側に誘導する。
+  const wasFollowingBottom = chatTimelineFollowBottom;
+  const line = renderTimelineMessageLine(payload);
   if (wasFollowingBottom) {
     scrollChatTimelineToBottom();
     // 段階F追加: 絵文字・クリップサムネイル用の<img>は非同期に読み込まれ、読み込み完了後に
@@ -2658,12 +3005,39 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   // 配信タイルの裏に隠れたままだが、getBoundingClientRect()によるサイズ・位置計算と
   // 中身のデータソースとして引き続き利用する）。ユーザーに実際に見える・クリックされるのは
   // floating-dropdown側のBrowserViewコピーの方。
+  // 2026-08-10追記: このgetBoundingClientRect()による矩形計算は「概算の初期値」に格下げされた。
+  // この隠れたDOM(style.css基準)と実際に描画される側(floating-dropdown.css基準)でフォント
+  // サイズ等が微妙にずれる/一部行の構成が根本的に異なる（YouTube通知対象の追加欄など）ため、
+  // 高さだけはfloating-dropdown.js側が描画後に実測したscrollHeightで都度補正される
+  // （window.floatingApi.reportContentHeight→main.jsのreportHeight、詳細はfloating-dropdown.js
+  // のmountAppMenu参照）。位置(x,y)・幅は引き続きこの矩形計算に依存する。
   let appMenuFloatOpen = false;
 
   /** .menu-bar-dropdown のDOM子要素を、floating-dropdown側へ渡す行データに変換する。 */
   function domDropdownToRows(dropdownEl) {
     return Array.from(dropdownEl.children).map((el) => {
       if (el.classList.contains('menu-bar-dropdown-separator')) return { type: 'separator' };
+      // 通知タブ刷新（2026-08-09）: 通知行はアイコンバッジ+クリックでチャンネル追加という
+      // 独自の描画・挙動が必要なため、他のaction/disabled行とは別のtype('notification')として
+      // channel/platform/alreadyAdded等の付随データもfloating-dropdown側へ渡す。
+      if (el.classList.contains('notification-item')) {
+        return {
+          type: 'notification',
+          channel: el.dataset.channel,
+          platform: el.dataset.platform,
+          text: el.querySelector('.notif-item-text')?.textContent || el.textContent,
+          alreadyAdded: el.dataset.alreadyAdded === '1',
+        };
+      }
+      // 通知タブ刷新（2026-08-09）: YouTube通知対象リストの管理行（一覧の各項目＋追加用の入力行）。
+      // 実際の入力欄・追加/削除ボタンはfloating-dropdown側（renderAppMenuRows）が組み立てる。
+      // こちら側はマーカー用の空要素を置いているだけで、typeとchannel（削除対象の場合）だけ渡す。
+      if (el.classList.contains('youtube-target-item')) {
+        return { type: 'youtube-target-item', channel: el.dataset.channel, label: el.dataset.displayName || el.dataset.channel };
+      }
+      if (el.classList.contains('youtube-target-add')) {
+        return { type: 'youtube-target-add' };
+      }
       if (el.classList.contains('disabled')) return { type: 'disabled', label: el.textContent };
       return { type: 'action', label: el.textContent, action: el.dataset.action, url: el.dataset.url };
     });
@@ -2710,7 +3084,7 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
    * ハンドラ内に直書きのswitch文としてあったが、floating-dropdown側からのIPCイベント
    * （実際にユーザーがクリックするのはこちら）でも同じ分岐が必要になったため関数化した。
    */
-  async function dispatchMenuAction(action, url) {
+  async function dispatchMenuAction(action, url, channel, platform) {
     switch (action) {
       case 'quit':
         await window.api.appMenu.quit();
@@ -2748,6 +3122,19 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
       case 'check-update':
         await window.api.appMenu.checkUpdate();
         break;
+      case 'add-channel-from-notification': {
+        // 通知タブ刷新（2026-08-09）: 通知行クリックでその配信をメイン画面へ追加する。
+        // 追加済みチャンネルはfloating-dropdown側でクリック不可にしているが、隠れたDOM本体の
+        // 直接クリック（保険経路）等でも二重追加が起きないよう、ここでも防御的にチェックする。
+        if (!channel || currentChannels.some((c) => c.toLowerCase() === channel.toLowerCase())) break;
+        const result = await window.api.addChannel(channel, platform || 'twitch');
+        if (!result || !result.ok) {
+          setStatusBanner(`チャンネルの追加に失敗しました: ${result ? result.error : '不明なエラー'}`);
+          break;
+        }
+        await refreshChips();
+        break;
+      }
     }
   }
 
@@ -2838,28 +3225,120 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
     if (versionMenuItem.classList.contains('open')) syncFloatingAppMenu(versionMenuItem);
   }
 
-  /** #6対応: 配信開始通知1件のプラットフォーム表示名（通知対象はTwitch/Kickのみ）。 */
-  function notificationPlatformLabel(platform) {
-    return platform === 'kick' ? 'Kick' : 'Twitch';
+  /**
+   * 通知タブ刷新（2026-08-09）: 配信開始通知1件のプラットフォームバッジ情報。
+   * 「(Twitch)」のようなサイト名テキスト表記を撤廃し、代わりに名前の左に各サイトのアイコンを
+   * 表示する要望への対応。配信チェックウィンドウのplatformBadgeText/
+   * .stream-check-card-platform-badgeと同じ図柄・配色（アプリ内で一貫させる）を踏襲する
+   * （通知タブ刷新2026-08-09でYouTubeも通知対象に追加、3分岐に拡張）。
+   */
+  function notificationPlatformBadge(platform) {
+    if (platform === 'kick') return { cls: 'kick', glyph: 'K' };
+    if (platform === 'youtube') return { cls: 'youtube', glyph: '▶' };
+    return { cls: 'twitch', glyph: '●' };
+  }
+
+  /**
+   * 通知タブ刷新（2026-08-09）: クリック可能な通知行を1つ作る。クリックでその配信をメイン画面へ
+   * 追加できる（channels:add相当のwindow.api.addChannelを再利用、stream-check-window.jsの
+   * ＋追加ボタンと同じ考え方）。既にメイン画面へ追加済みのチャンネルは「追加済み」表示にし
+   * クリック不可にする。
+   */
+  function makeNotificationItem(n, alreadyAdded) {
+    const el = document.createElement('div');
+    el.className = 'menu-bar-dropdown-item notification-item';
+    if (alreadyAdded) el.classList.add('already-added');
+    el.dataset.action = 'add-channel-from-notification';
+    el.dataset.channel = n.channel;
+    el.dataset.platform = n.platform;
+    el.dataset.alreadyAdded = alreadyAdded ? '1' : '0';
+
+    const badge = notificationPlatformBadge(n.platform);
+    const badgeEl = document.createElement('span');
+    badgeEl.className = `notif-platform-badge ${badge.cls}`;
+    badgeEl.textContent = badge.glyph;
+    el.appendChild(badgeEl);
+
+    const time = new Date(n.detectedAt).toLocaleString('ja-JP', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    // チャンネル名はユーザー由来の文字列のため、既存方針(XSS対策)通りtextContentで挿入する。
+    const textEl = document.createElement('span');
+    textEl.className = 'notif-item-text';
+    textEl.textContent = alreadyAdded
+      ? `${n.channel} 配信開始 ${time}（追加済み）`
+      : `${n.channel} 配信開始 ${time}`;
+    el.appendChild(textEl);
+
+    if (!alreadyAdded) {
+      el.addEventListener('click', (e) => {
+        // 通常はfloating-dropdown側のコピー（renderAppMenuRows、実際にユーザーがクリックする方）の
+        // mousedownリスナーで処理される。ここでの直接クリックは、隠れたDOM本体が万一直接
+        // クリックされるケース（開発者ツール等）向けの保険（makeActionItemと同じ考え方）。
+        e.stopPropagation();
+        closeAllMenuBarDropdowns();
+        dispatchMenuAction('add-channel-from-notification', null, n.channel, n.platform);
+      });
+    }
+    return el;
   }
 
   /** 「通知」ドロップダウンの中身を新しい順に描画する。 */
+  /**
+   * 通知タブ刷新（2026-08-09）: YouTube通知対象リストの管理行を1件作る（チャンネル名＋×削除ボタン）。
+   * ×ボタンはfloating-dropdown側（renderAppMenuRows）が実装するため、こちら（隠れたDOM本体）には
+   * data-channel等のマーカーだけ持たせる。
+   */
+  function makeYoutubeTargetItem(t) {
+    const el = document.createElement('div');
+    el.className = 'menu-bar-dropdown-item youtube-target-item';
+    el.dataset.channel = t.channel;
+    el.dataset.displayName = t.displayName || t.channel;
+    el.textContent = t.displayName || t.channel;
+    return el;
+  }
+
+  /** 通知タブ刷新（2026-08-09）: YouTube通知対象を追加するための入力行のマーカー要素。 */
+  function makeYoutubeTargetAddRow() {
+    const el = document.createElement('div');
+    el.className = 'menu-bar-dropdown-item youtube-target-add';
+    return el;
+  }
+
   function renderNotificationsDropdown(state) {
     notificationsMenuDropdown.innerHTML = '';
-    const items = (state.items || []).slice(-20).reverse();
+    // 通知タブ刷新（2026-08-09）: 表示上限5件（保存件数自体もmain.js側のstreamStartNotifications
+    // storeで5件に切り詰め済み。ここでのsliceは防御的な二重措置）。
+    const items = (state.items || []).slice(-5).reverse();
     if (!items.length) {
       notificationsMenuDropdown.appendChild(makeDisabledItem('通知はまだありません'));
-      return;
-    }
-    items.forEach((n) => {
-      const time = new Date(n.detectedAt).toLocaleString('ja-JP', {
-        month: 'numeric',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
+    } else {
+      items.forEach((n) => {
+        // 通知タブ刷新（2026-08-09）: Twitchはフォロー基準の検知になり、n.channelはHelix APIの
+        // login（常に小文字）で届く。ユーザーがタイル追加時に別の大文字小文字で入力していると
+        // currentChannels側の表記と食い違い「追加済み」判定を取りこぼす恐れがあるため、
+        // 大文字小文字を無視して比較する。
+        const alreadyAdded = currentChannels.some((c) => c.toLowerCase() === n.channel.toLowerCase());
+        notificationsMenuDropdown.appendChild(makeNotificationItem(n, alreadyAdded));
       });
-      const label = `🔴 ${n.channel}（${notificationPlatformLabel(n.platform)}）配信開始 ${time}`;
-      notificationsMenuDropdown.appendChild(makeDisabledItem(label));
+    }
+
+    // 通知タブ刷新（2026-08-09）: YouTube通知対象リストの管理セクション。「タイル追加済みの
+    // チャンネルだけが対象だと、追加した時点で既にライブと分かっているため通知の意味が薄い」
+    // というユーザー指摘を受け、タイル追加/削除とは独立した専用リストを通知タブ内で管理できるようにした。
+    // 挿入位置の変更（2026-08-10）: 以前は「ラベル→一覧→追加欄」の順だったため、新規追加した
+    // チャンネルがラベルと追加欄の間（＝一覧の末尾）に挿入されるように見えていた。追加欄を
+    // ラベル直下に固定して常に一覧の上に置き、一覧（新しく追加したものほど下）はその下に
+    // 続くよう順序を入れ替えた。
+    notificationsMenuDropdown.appendChild(makeSeparator());
+    notificationsMenuDropdown.appendChild(makeDisabledItem('YouTube通知対象'));
+    notificationsMenuDropdown.appendChild(makeYoutubeTargetAddRow());
+    const youtubeTargets = state.youtubeTargets || [];
+    youtubeTargets.forEach((t) => {
+      notificationsMenuDropdown.appendChild(makeYoutubeTargetItem(t));
     });
   }
 
@@ -2874,8 +3353,11 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
   appMenuBar.addEventListener('click', async (e) => {
     const actionEl = e.target.closest('[data-action]');
     if (actionEl) {
+      // 通知行(alreadyAdded='1')は要素にdata-actionを持たせたままにしているため（domDropdownToRows/
+      // floating-dropdown側の判定用）、この委譲ハンドラで拾ってしまわないよう追加済みは無視する。
+      if (actionEl.dataset.alreadyAdded === '1') return;
       closeAllMenuBarDropdowns();
-      await dispatchMenuAction(actionEl.dataset.action, actionEl.dataset.url);
+      await dispatchMenuAction(actionEl.dataset.action, actionEl.dataset.url, actionEl.dataset.channel, actionEl.dataset.platform);
       return;
     }
     const item = e.target.closest('.menu-bar-item');
@@ -2917,9 +3399,25 @@ window.api.onEscapePressed(() => closeTopmostPanelWithEscape());
 
   // floating-dropdown側（実際にユーザーがクリックする側）からの行クリックをこちらへ中継。
   window.api.floatingDropdown.onEvent(async (evt) => {
-    if (evt.id !== 'app-menu' || evt.type !== 'action') return;
-    closeAllMenuBarDropdowns();
-    await dispatchMenuAction(evt.value?.action, evt.value?.url);
+    if (evt.id !== 'app-menu') return;
+    if (evt.type === 'action') {
+      closeAllMenuBarDropdowns();
+      await dispatchMenuAction(evt.value?.action, evt.value?.url, evt.value?.channel, evt.value?.platform);
+      return;
+    }
+    // 通知タブ刷新（2026-08-09）: YouTube通知対象リストの追加/削除。ドロップダウンは開いたままにし
+    // （メニューが毎回閉じると連続で追加・削除しづらいため）、一覧の更新は
+    // notifications:state-changed経由のrenderNotificationsStateに任せる。
+    if (evt.type === 'youtube-target-add') {
+      const channel = String(evt.value?.channel || '').trim();
+      if (channel) await window.api.addYoutubeNotificationTarget(channel);
+      return;
+    }
+    if (evt.type === 'youtube-target-remove') {
+      const channel = evt.value?.channel;
+      if (channel) await window.api.removeYoutubeNotificationTarget(channel);
+      return;
+    }
   });
 
   window.api.appMenu.onStateChanged((state) => renderAppMenuState(state));

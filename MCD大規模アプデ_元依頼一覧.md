@@ -304,6 +304,269 @@
     `createStreamCheckWindow()`をmain.jsに新設）とし、このlayout-window関連コードには
     一切手を加えていない。段階3(このセクション)への影響はなし。
 
+## 実機確認で追加報告された3件（2026-08-10、実装・独立レビューPASS済み）
+
+21. [x] 全タブ統合のチャンネルタブ（`.chat-integration-tabs`、dmf_kyochan/mukai_fps/meltonff/
+    sasatik等が並ぶ横並びタブ）を、マウスホイールでスクロールできるようにする。
+    現状は`overflow-x: auto`（style.css 1402行〜、横スクロールバー自体は既存の
+    ブランドカラーthumbで表示済み＝項目10で対応済み）だが、マウスホイール操作（縦方向の
+    deltaY）が横スクロールに変換されておらず、スクロールバーを直接ドラッグしないと
+    スクロールできない。renderer.js側で`.chat-integration-tabs`に`wheel`イベントリスナーを
+    追加し、`e.deltaY`（必要なら`e.deltaX`優先）を`scrollLeft`加算に変換する対応を想定。
+    影響範囲はこのタブバーのみで、他の横スクロール箇所（#channel-chips、#control-bar）は
+    今回のユーザー指摘に含まれないためスコープ外。
+
+    → 対応済み（2026-08-10セッション）。`.chat-integration-tabs`にwheelイベントリスナーを追加し、
+    deltaX/deltaYをscrollLeftへ変換する形で実装。独立レビューでPASS。実機での動作確認はまだ未実施。
+
+22. [x] 自作メニューバー（ファイル/表示/ヘルプ/バージョン/通知）の各ドロップダウン内に
+    ある「無駄な余白」の調整。ユーザー指摘箇所：ファイル（「終了」の下側）、表示
+    （「レイアウトを再計算」の下側）、ヘルプ（「Kick Developer Portal」の下側）、
+    バージョン（「アップデートを確認」の下側）、通知（「YouTube通知対象」ラベルと
+    チャンネル名追加欄の間）。コード調査の結果、ドロップダウン本体（.menu-bar-dropdown/
+    floating-dropdown.css側の複製含む）のpaddingは`4px 0`、各項目は`padding: 6px 16px`
+    のみで、マークアップ上も末尾に空のプレースホルダー要素等は無い。スクリーンショットで
+    確認できる余白の実際の原因（floating-dropdown BrowserViewの矩形計算元である隠れた
+    `.menu-bar-dropdown`側のレイアウト崩れの可能性が高いが未特定）は、実装フェーズの
+    冒頭で実機のDevTools（表示→開発者ツール）による要素検証で確定させてから着手する。
+    通知タブの余白は項目23（YouTube通知対象リストの並び順変更）と合わせて対応すると
+    見た目上も自然になる可能性が高い。
+    → 対応済み（2026-08-10セッション）。Planエージェントによる調査の結果、原因は隠れたDOM
+    (style.css基準)と実際に表示される側(floating-dropdown.css基準)の高さの食い違い
+    （フォントサイズ差に加え、YouTube通知対象の追加行は隠れたDOM側が空div・表示側が
+    input+buttonという構造自体の違いもあった）と特定。floating-dropdown.js側で描画後の
+    実測`scrollHeight`をmain.jsへ報告し、BrowserViewの高さをその都度実寸へ補正する方式
+    （通知ドロップダウンのみ既存の5件スクロール上限270pxでクランプ）で対応。channel-history/
+    volume-mixerパネルは対象外（app-menuパネルのみのスコープ）。独立レビューでPASS。
+    →実機確認済み（2026-08-11）。ユーザーから「npm start再起動でも直らない」との報告を受け、
+    floating-dropdown BrowserView自身のDevToolsを覗く手段（did-finish-load時の自動DevTools
+    起動、デバッグ用に一時追加・検証後に削除済み）を追加して実測。実際のBrowserView高さは
+    中身(40px)にほぼ一致しており（元の概算値42pxから2px補正のみ）、修正自体は正しく機能して
+    いたと確認。ユーザーが実際のアプリ画面のスクリーンショットでも「終了」直下の余白解消を
+    確認・承認済み。
+
+23. [x] 通知タブのYouTube通知対象リストで、チャンネル追加時の挿入位置を変更する。
+    現状（renderer.js renderNotificationsDropdown、3232〜3241行）は
+    「YouTube通知対象」ラベル→登録済みチャンネル一覧→末尾に追加用入力欄、という順で
+    描画しており、新規追加したチャンネルは一覧の末尾（＝ラベルと入力欄の間）に挿入される
+    形になる。これを「ラベル→追加用入力欄→登録済みチャンネル一覧（新しく追加した
+    ものほど下）」の順に変更する。renderer.js側の描画順（makeDisabledItem→
+    makeYoutubeTargetAddRow→youtubeTargets.forEach）と、実際に表示される
+    floating-dropdown.js側のrenderAppMenuRows（行タイプの並びはrenderer.js側が渡す
+    rows配列の順番に従うだけなので、renderer.js側の並び替えのみで対応可能な想定）の
+    両方を確認しながら実装する。
+    → 対応済み（2026-08-10セッション）。renderer.jsのrenderNotificationsDropdownで、
+    追加欄(makeYoutubeTargetAddRow)をラベル直下・一覧より前に描画する順序へ変更（一覧側の
+    ロジックは無変更、DOM追加順のみの変更）。domDropdownToRowsが子要素をDOM順にそのまま
+    floating-dropdown側へ渡す実装のため、表示側にも同じ順序が反映される。独立レビューでPASS。
+    実機での動作確認はまだ未実施。
+
+## 新規依頼（2026-08-17、ユーザーより追加）
+
+24. [x] 過去に一度でも追加した配信の設定（埋め込みチャットのON/OFF・アプリボタンの音量設定）を、
+    配信やアプリ自体を閉じたり、PCの再起動後も最後の設定を記憶するように変更する。
+    → 対応済み（2026-08-17セッション）。原因はsrc/main.jsの`removeChannel()`が、配信タイルを
+    閉じるたびに`chatHidden`/`chatIntegrationHidden`/`channelVolumes`のstoreエントリを
+    自ら`delete`していたこと（保存・復元の仕組み自体は既に正しく実装済みで、削除時に消して
+    いたことのみが原因）。3つのdelete処理ブロックを撤去し、意図的にstoreへ恒久保持する方式に
+    変更（新規の復元ロジック追加は不要、既存のaddChannel/dom-ready側の読み込みがそのまま機能）。
+    `channels`/`tileLayouts`/`channelPlatforms`等、今回スコープ外の他の永続化キーの削除処理は
+    従来通り維持。周辺の古いコメント（「removeChannelで消える」前提の記述）も合わせて更新。
+    独立レビューでPASS（node --check構文確認済み、ザッピング機能への非回帰も確認）。純JS変更で
+    バンドラー無し（electron .で直接起動）のためビルド・.bat不要。**実機確認済み（2026-08-17）**。
+
+25. [x] 配信一覧ボタン内のあらゆるスクロールバーが見切れてしまう問題の修正。
+    → 対応済み（2026-08-17セッション）。原因はframe:falseの独立BrowserWindowでWindows 11の
+    DWMが角丸クリップを窓の外周へ直接適用し、`.stream-check-window-body`（3タブ共通の唯一の
+    スクロールコンテナ）のスクロールバーが真の右端に張り付いていたこと。
+    stream-check-window.cssへmargin-right:3pxでスクロールバーと外周の隙間を確保し、
+    main.jsのcreateStreamCheckWindow()へroundedCorners:falseを追加してDWM自動角丸自体を
+    無効化。独立レビューでPASS（`.stream-check-targets-list`は別スクロールコンテナではなく
+    対象漏れ無しと確認）。**実機確認済み（2026-08-17）**。dev版（npm start）で自動追加タブから
+    フォロー一覧170件を読み込み、スクロールバーが外周から余白を保って表示されることを確認。
+
+26. [x] Twitchの配信画面をドラッグしようとした時、ドラッグが実質不可になってしまう問題の
+    調査と修正。
+    → 対応済み（2026-08-17セッション）。原因はtileInteractionPreload.jsのmousedown
+    ハンドラが移動ゾーンではpreventDefault()を呼ばないため、Twitch本体DOMの移動ゾーン上に
+    重なるアバター画像等の`<img>`要素上でmousedownするとChromiumのネイティブHTML5画像
+    ドラッグが横取りし、以降mousemoveが届かずタイル移動が止まっていたこと（Kick/YouTubeは
+    同種の画像オーバーレイが無いため再現しない）。`isNativeDraggableElement()`
+    （`img, a[href]`判定）を追加し、該当要素上のmousedownではpreventDefaultするよう変更。
+    既存の音量スライダー等の`isNativeDragControl`優先判定・通常クリック（mouseupのclick）
+    への影響なしと独立レビューで確認。ただし実際のTwitch DOMを見ての検証ではなく静的解析に
+    基づく推定修正のため、実機での動作確認が特に重要。**実機確認済み（2026-08-17）**。dev版で
+    Twitchタイルのアバター画像上からドラッグを実行し、ネイティブ画像ドラッグに横取りされず
+    正常にタイルの移動/リサイズが機能することを確認。
+
+27. [x] ヘッダーの設定ボタンの名称を「環境設定」に変更する。
+    → 対応済み（2026-08-17セッション）。index.htmlの`#settings-open-btn`のラベル・titleを
+    「設定」→「環境設定」に変更（アイコン⚙は維持）。設定パネル自体の見出し`<h2>設定</h2>`は
+    今回のスコープ（ヘッダーボタンの名称のみ）外として意図的に未変更。独立レビューでPASS
+    （他に「設定」というラベル文字列を重複保持している箇所・文字列比較で壊れる箇所なし）。
+    **実機確認済み（2026-08-17）**。ヘッダーボタンが「⚙環境設定」表示になっていることを確認。
+
+28. [x] 各ヘッダーのボタン内のタイトル（例：設定ボタン内の「設定」「アカウント連携」等）の
+    上下の間隔が開きすぎているので、もう少し狭める。
+    → 対応済み（2026-08-17セッション）。原因はブラウザ既定のh2/h3マージン（約19〜20px）が
+    `.settings-divider`等と積み重なっていたこと。`.modal-content`のh2/h3パターンを使う
+    `#settings-modal`（設定）/`#zapping-modal`（ザッピング）/`#drops-hub-modal`（Drops）の
+    3パネルに絞ってh2のmargin-bottom・h3のmargin-top/bottomを縮小（約19px→約10px）。
+    見出し構造が異なる`#emotes-panel`/`#layout-share-panel`（`.panel-header`内h3+×ボタンの
+    横並び構成）は対象外として意図的に未変更。独立レビューでPASS（別ファイルの
+    `.help-tab-content h3`への影響なしも確認）。**実機確認済み（2026-08-17）**。設定パネルの
+    見出しと直下項目の余白が縮まっていることを確認。
+
+    ⚠️**2026-08-17追加対応**: ユーザーから「スタンプ・共有と他も確認し、余白を同じように
+    縮小処理を行ってください」と追加依頼を受け、前回スコープ外だった`#emotes-panel`
+    （スタンプ）・`#layout-share-panel`（共有）と、見落としだった箇所を対応。
+    Planエージェントによる網羅調査の結果、以下4箇所を追加修正（すべてsrc/renderer/style.css
+    のみのCSS変更）:
+    ①`#emotes-panel`/`#layout-share-panel`の`.panel-header h3`（flexコンテナ内でも
+    ブラウザ既定のh3マージンが子要素に残っていたため`margin:0`に）
+    ②`#emotes-panel`の`h4`（「お気に入り」「取得結果」見出し。h4用の全般リセットが
+    元々存在しなかった見落とし）を`margin:10px 0 6px`に統一
+    ③help/welcome/premium-locked/feedback/pro-authの5モーダル（overlay-panel/index.html、
+    style.cssを共有読み込み）のh2に、既存の設定/ザッピング/Drops向けmargin-bottom:10px
+    ルールをID追加する形で適用（前回セッションのスコープ漏れ）
+    ④`.help-tab-content h3`にmargin-bottom:6pxを追加（margin-topのみリセット済みだった）。
+    独立レビューでPASS（該当ID・セレクタの実在確認、既存ルールとの競合なしを確認）。
+    実機確認済み（2026-08-17）：スタンプ/共有/使い方注記(基本操作見出し)/会員登録の各パネルで
+    見出し直下の余白が縮まっていることを目視確認。純CSS変更のためビルド不要、.batルール非該当。
+
+29. [x] 設定ボタン内のフォントメニュー（プルダウン）を当アプリのオリジナルデザインに変更する。
+    → 対応済み（2026-08-17セッション）。src/renderer/style.cssの`#channel-platform-select`
+    （項目9で確立済みのブランドカラー矢印デザイン）に`#comment-font-select`をセレクタ追加する
+    形で共通化。`.modal-content input`との横幅統一のため`#comment-font-select`のみ個別に
+    `width:100%`を追加。決済関連(pro-checkout-months-select)・emotes/zappingのselectは
+    今回もスコープ外のため未変更。独立レビューでPASS（CSS構文・ID一致・他selectへの
+    影響なしを確認）。純CSS変更のためビルド不要、.batルール非該当。
+    実機確認済み（2026-08-17）。
+
+30. [x] ザッピングの対象（サイト名）メニュー（プルダウン）を当アプリのオリジナルデザインに
+    変更する。
+    → 対応済み（2026-08-17セッション）。項目29と同じ共有ブロックに`#zapping-platform-select`
+    をセレクタ追加。`.group`（field-labelと横並びのflexレイアウト）内のため
+    `#channel-platform-select`と同様width:100%は付与せず。独立レビューでPASS。純CSS変更のため
+    ビルド不要。実機確認済み（2026-08-17）。
+
+31. [x] 配信画面下部のメタ情報バーをON/OFFできるスイッチを、メイン画面のどこか、または
+    ヘッダーの設定ボタン内に新設する別タブへ配置する。このON/OFFスイッチ自体も
+    オリジナルデザイン化する。
+    → 対応済み（2026-08-17セッション）。Planエージェントによる調査の結果、アプリ内に
+    「別タブ」型UI自体が存在しない（タブUI新規設計はコスト過大）と判明し、既存の
+    #settings-modal内に1行追加する形に確定。store defaults に`tileInfoBarEnabled`(既定true)
+    を追加し、`applyTileBoundsFromRect()`のTILE_INFO_BAR_HEIGHT参照とedgeConfigFor()の
+    stream側bottom判定の両方をこのフラグに連動させる（OFF時は情報帯の高さ0で配信映像が
+    全高を使い、代わりに配信映像側の下端リサイズを有効化。片方だけ直すと「バーは消えたが
+    下端リサイズ不可」等の不整合になるためセットで対応）。settings:set-all側でトグル変化時に
+    relayoutStreamViews()+全チャンネルsendEdgeConfig()再送。スイッチ自体はアプリ内に前例が
+    無かったため新規CSS（checkbox+appearance:none+::afterノブ、ブランドグラデーション
+    #4f8cff〜#22d3ee）で自作。独立レビューでPASS（座標計算の整合性、CSS詳細度、
+    activeInfoBarViewとの連動を含め確認）。純JS/CSS/HTML変更でビルド不要、.batルール非該当。
+    実機確認済み（2026-08-17）。
+
+32. [x] 全タブ統合のチャット欄に表示されるチャンネル名（ユーザー名の左側）を、各チャンネルの
+    アイコンに変更する。
+    → 対応済み（2026-08-17セッション）。src/main.jsの`fetchTwitchStreamMeta`/
+    `fetchKickStreamMeta`にavatarUrl取得を追加（Twitchは既存の`fetchTwitchAvatarUrls`流用、
+    Kickは配信メタ取得と同一レスポンスから`profile_pic`を拾うだけで追加リクエスト無し）。
+    YouTubeは今回スコープ外（アバター取得ロジック未実装のためフォールバック運用）。
+    src/renderer/renderer.jsの`renderTimelineMessageLine`で、これまでテキストだった
+    `[チャンネル名]`表示を`<img class="chat-channel-icon">`に置き換え、streamMetaCacheから
+    引いたavatarUrlを使用。未取得/読み込み失敗時はチャンネル名から決定的にhueを算出した
+    頭文字アイコン（SVG data URI）にonerrorで差し替え。title/alt属性でチャンネル名は
+    ホバー時に確認可能な形で保持。src/renderer/style.cssに`.chat-channel-icon`
+    （18px円形、border付き）を新設し旧`.chat-channel`ルールは削除。独立レビューでPASS
+    （node --check構文確認、呼び出し元3箇所のchannel引数の型、escapeHtmlの属性適用、
+    CSS残存参照なし、fetchAllStreamMeta等既存消費側への副作用なしを確認）。純JS/CSS変更で
+    ビルド不要、.batルール非該当。Electronアプリのためブラウザプレビューでは検証不可、
+    実機での動作・見た目確認はまだ未実施。
+
+## 実機確認で追加報告された不具合2件（2026-08-17、対応済み・実機確認前）
+
+A. [x] YouTubeのチャンネルアイコンを読み込めない、認識できない問題。
+    → 項目32実装時点ではYouTubeのアバター取得は意図的に未実装（Phase2として保留）だったため
+    フォールバック（頭文字＋色分けアイコン）が常に出ていた状態で、バグではなく実装漏れと判明。
+    Planエージェント調査の結果、`fetchYoutubeLiveInfoFree`が既に取得しているライブページHTML
+    中にYouTube側の`ytInitialData`という別JSONが同居しており、そこからチャンネルアバターURLを
+    追加抽出できると判明。新規関数`extractYoutubeChannelAvatarFromInitialData`を追加し、
+    既知パス（`videoSecondaryInfoRenderer.owner.videoOwnerRenderer.thumbnail.thumbnails`）を
+    まず試し、見つからない場合はJSON全体を反復探索するフォールバックへ切り替える
+    （どちらも失敗時はnullを返すのみで例外は投げない防御的実装）。追加のHTTPリクエストは
+    発生しない。`fetchAllStreamMeta`のYouTube分岐にもavatarUrlを素通しさせる1行を追加。
+    renderer.js側（項目32で実装済みのgetChannelAvatarUrl等）は無改修で自動反映される設計。
+    独立レビューでPASS（構文確認、反復探索の性能・安全性、既存呼び出し元への非破壊性、
+    fetchAllStreamMeta消費側への影響なしを確認）。実機確認済み（2026-08-17、ユーザーより
+    「概ねいい感じ」との報告）。
+
+B. [x] YouTubeのスタンプ（エモート）が読み込めない問題。
+    → Planエージェント調査の結果、`fetchYoutubeEmotesForChannel`（絵文字ピッカーUIをBrowserViewで
+    開いてDOM構造から画像を読み取る非公式スクレイピング方式）に、①ピッカー描画待ちが固定1秒待機
+    で環境によっては間に合わず取りこぼす、②カテゴリーが見つからない/0件だった場合も常に「0件取得
+    しました」という成功扱いの表示になり、実際に何が起きたかユーザーに伝わらない、という2つの
+    脆弱性を確認。①は固定待機から「カテゴリーが現れるまで最大2.5秒ポーリング」方式に変更。
+    ②はピッカー自体が開けなかった場合と、開けたがチャンネル固有スタンプが無かった場合を区別し、
+    それぞれ専用のエラーメッセージを投げるように変更（呼び出し元のIPCハンドラ・renderer.js側は
+    既存のresult.errorチェックの仕組みでそのまま表示されるため無改修）。なお「現在配信中でないと
+    取得できない」という既存の制約自体は変更していない（配信中に選択したチャンネルでお試しいただく
+    必要がある）。独立レビューでPASS。
+
+    → 追加調査（2026-08-17、実機で「スタンプ一覧を開けませんでした」エラーを確認したとの
+    報告を受け、Claude Browserで実際のYouTubeライブページに接続して原因を特定）: 根本原因は
+    「YouTube側のページ構造変化」ではなく、このBrowserViewが使うpersist:youtubeパーティションに
+    Googleアカウントのログインセッションが無いと、YouTubeがメッセージ入力欄
+    （`<yt-live-chat-message-input-renderer>`）自体を描画しない（「ログインしてチャットを始める」
+    ボタンのみ表示）ことだった。この状態では絵文字ピッカーボタンも存在しない。アプリには既に
+    「アカウント連携」機能（環境設定）が同じpersist:youtubeパーティションでYouTubeログインを
+    行う仕組みがあるため、連携済みならログインセッションが引き継がれる想定。ログイン欄の有無を
+    先に判定し、無い場合はピッカー操作を試みず「YouTubeアカウントが未連携のようです（環境設定の
+    「アカウント連携」からYouTubeにログインすると取得できるようになります）」という専用の
+    エラーメッセージを返すよう修正。独立レビューでPASS（IIFE内の複数return経路の型整合性、
+    IPCハンドラのtry/catch経由での伝播、既存コード内の同一セレクタ使用実績を確認）。
+    YouTube側のUI構造依存のスクレイピングであるため、修正後も引き続きYouTube側の仕様変更で
+    壊れうる前提。
+
+    → 再修正（2026-08-17、ユーザーがYouTubeアカウント連携済み（環境設定で緑丸「連携済み」
+    確認済み）の状態で試したところ、それでも「未連携のようです」エラーが出るとの報告を受けて
+    調査）: 原因は、ログイン済みであっても入力欄（Polymerコンポーネント）の描画自体が1.5秒より
+    遅くなることがあり、直後の単発チェックでは描画完了前に「未ログイン」と誤判定していたこと
+    だった。入力欄の有無チェックとカテゴリー検出を1つのポーリングループに統合し、入力欄が
+    見つかるまで最大10回×500ms（5秒）待ってから、それでも見つからない場合のみ未ログインと
+    判定するよう変更（ピッカーボタンのクリックは初回発見時の1回のみ、トグル誤動作を防止）。
+    独立レビューでPASS（クロージャのスコープ、ポーリング終了条件の網羅性、呼び出し元とのキー名
+    整合、BrowserView破棄処理との競合なしを確認）。
+
+    → 実機確認（2026-08-17、ポーリング統合版で再テスト）: 「未連携のようです」エラーは解消し、
+    未ログイン誤判定は修正できたことを確認。ただし新たに「このチャンネル固有のスタンプが
+    見つかりませんでした」エラーが発生。ユーザーから「YouTubeのチャンネル固有スタンプは
+    メンバーシップ限定だから0件になっているのでは」との指摘があり、正しいと判断（コード内
+    コメントの通りチャンネル固有スタンプ＝メンバーシップ特典絵文字であり、チャンネルが
+    メンバーシップ機能を提供していない、または連携アカウントがそのチャンネルの有料メンバー
+    でない場合は0件になるのが正常）。ロジックは変更せず、`fetchYoutubeEmotesForChannel`の
+    エラーメッセージ（`categoriesFound>=2`側）と、`overlay-panel/index.html`のYouTubeヘルプ
+    セクションにその旨を明記する文言追加のみ実施。独立レビューでPASS（構文確認、HTML構造の
+    健全性、条件分岐との整合性を確認）。
+
+いずれも純JS変更でビルド不要、.batルール非該当。
+
+33. [x] Pro機能ボタンの無料会員への挙動変更。現状は有料会員以外は押せない仕様になっているが、
+    無料会員でも押せるようにし、中の機能は全てグレーアウト+中央に「有料会員限定」等の文言を
+    表示することで、無料会員でも実機画面上で機能のイメージを確認できるようにする。
+    - ボタン内にタブがある場合、タブ自体は押せるようにする。ただし「配信一覧」など自動更新が
+      発生する機能はグレーアウト中は自動更新等をさせない。
+    - 全タブ統合の場合も、グレーアウト中は事前に配信を開いていてもチャンネルを一覧に表示せず、
+      更新もしない（無料会員＝グレーアウト中の定義）。
+
+    → 対象5箇所（ザッピング、配信一覧、全タブ統合チャット、Drops自動追加、Drops自動削除）の
+    early return撤去+共通クラス`.pro-content-locked`/`.pro-lock-overlay`によるグレーアウト+
+    案内文言表示を実装（2026-08-17）。「配信一覧」（独立BrowserWindowのstream-check-window）は
+    premium:changedイベント中継用のIPC配線を追加し、ロック中はTwitch/YouTube/Kick APIへの
+    フェッチ・自動更新タイマー・Twitch連携状態確認を一切呼ばずクォータを消費しない設計にした。
+    実際の機能実行はpremiumUnlockedで引き続きガード（多層防御）。独立レビューでPASS
+    （HTML構造の健全性、CSS適用範囲、ID参照の整合性、多層防御の網羅性、APIクォータ節約を確認）。
+    実機確認はまだ未実施。
+
 ## UIデザインについて（ユーザーからの補足）
 
 UIに関しては応相談。イメージとしては「MCDに合う、オリジナリティのあるデザイン」

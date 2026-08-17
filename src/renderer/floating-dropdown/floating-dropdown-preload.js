@@ -11,4 +11,9 @@ contextBridge.exposeInMainWorld('floatingApi', {
 
   // 行クリック・削除ボタン等のユーザー操作を、開いた側のidと紐づけてメインウィンドウへ中継してもらう。
   notify: (id, type, value) => ipcRenderer.invoke('ui:floating-dropdown-event', { id, type, value }),
+
+  // app-menu余白バグ修正（2026-08-10）: 実際に描画された中身の高さ(scrollHeight)を
+  // メインプロセスへ自己申告し、BrowserViewの矩形（メインウィンドウ側の隠れたDOMから
+  // 概算した値）を実寸へ補正してもらう。返信不要のため invoke ではなく send を使う。
+  reportContentHeight: (id, height) => ipcRenderer.send('ui:floating-dropdown-report-height', { id, height }),
 });

@@ -70,6 +70,12 @@ contextBridge.exposeInMainWorld('api', {
   getFeedPinnedYoutube: () => ipcRenderer.invoke('feed-pin:get-youtube'),
   setFeedPinnedYoutube: (list) => ipcRenderer.invoke('feed-pin:set-youtube', list),
 
+  // YouTube通知対象リスト（通知タブ刷新2026-08-09）
+  getYoutubeNotificationTargets: () => ipcRenderer.invoke('youtube-notification-targets:get'),
+  addYoutubeNotificationTarget: (channel, displayName) =>
+    ipcRenderer.invoke('youtube-notification-targets:add', { channel, displayName }),
+  removeYoutubeNotificationTarget: (channel) => ipcRenderer.invoke('youtube-notification-targets:remove', channel),
+
   getZappingConfig: () => ipcRenderer.invoke('zapping:get-config'),
   startZapping: (filters) => ipcRenderer.invoke('zapping:start', filters),
   stopZapping: () => ipcRenderer.invoke('zapping:stop'),
@@ -136,6 +142,22 @@ contextBridge.exposeInMainWorld('api', {
 
   getChatIntegrationHiddenMap: () => ipcRenderer.invoke('chat-integration:get-hidden-map'),
   setChatIntegrationHidden: (channel, hidden) => ipcRenderer.invoke('chat-integration:set-hidden', { channel, hidden }),
+
+  // 2026-08-09追加: チャット統合の設定ウィンドウ（歯車アイコン）と、常時検知ワード・
+  // 遡り中の自動更新停止トグル。設定ウィンドウ側(chat-settings-window-preload.js)からの
+  // 変更をメインウィンドウ側でも即座に反映するため、changedイベントも購読できるようにする。
+  openChatSettingsWindow: () => ipcRenderer.invoke('chat-settings-window:open'),
+  getChatWatchWords: () => ipcRenderer.invoke('chat-watch-words:get'),
+  onChatWatchWordsChanged: (cb) => ipcRenderer.on('chat-watch-words:changed', (_e, words) => cb(words)),
+  getChatScrollLock: () => ipcRenderer.invoke('chat-scroll-lock:get'),
+  onChatScrollLockChanged: (cb) => ipcRenderer.on('chat-scroll-lock:changed', (_e, enabled) => cb(enabled)),
+
+  // 2026-08-09追加: アクティブタイル情報帯（active-info-bar、配信画面がアクティブな時だけ
+  // メタ情報を前面化する専用BrowserView）。main.js側からどのチャンネルが今アクティブかを
+  // 受け取り、そのチャンネル分の表示内容(タイトル/カテゴリ/統計)だけをpushActiveInfoBarContent
+  // で送り返す（renderer.js側のapplyStreamMetaToTileBars参照）。
+  onActiveInfoBarChannelChanged: (cb) => ipcRenderer.on('active-info-bar:active-channel-changed', (_e, channel) => cb(channel)),
+  pushActiveInfoBarContent: (payload) => ipcRenderer.send('active-info-bar:push-content', payload),
 
   getChannelVolumes: () => ipcRenderer.invoke('channels:get-volumes'),
   setChannelVolume: (channel, volume) => ipcRenderer.invoke('channels:set-volume', { channel, volume }),
