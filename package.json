@@ -1,6 +1,6 @@
 {
   "name": "multicastdeck",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Twitch/YouTube/Kick マルチストリーム＋チャット統合＋Drops自動化デスクトップアプリ「MultiCastDeck」",
   "author": "yato",
   "main": "src/main.js",

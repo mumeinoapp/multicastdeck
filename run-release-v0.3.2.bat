@@ -3,14 +3,14 @@ cd /d "%~dp0"
 echo Current directory: %cd%
 echo.
 
-echo === git commit / tag / push (v0.3.1) ===
+echo === git commit / tag / push (v0.3.2) ===
 call git add -A
-call git commit -m "v0.3.1: notification tab expansion, YouTube meta info, chat search, UI fixes"
+call git commit -m "v0.3.2: Pro feature grayout for free users, YouTube icon/emote fixes, UI polish"
 if errorlevel 1 (
   echo.
   echo git commit failed or nothing to commit. Continuing anyway...
 )
-call git tag -a v0.3.1 -m "v0.3.1"
+call git tag -a v0.3.2 -m "v0.3.2"
 if errorlevel 1 (
   echo.
   echo git tag failed ^(maybe it already exists^). Continuing anyway...
@@ -22,10 +22,10 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-call git push origin v0.3.1
+call git push origin v0.3.2
 if errorlevel 1 (
   echo.
-  echo git push origin v0.3.1 ^(tag^) failed. See errors above.
+  echo git push origin v0.3.2 ^(tag^) failed. See errors above.
   pause
   exit /b 1
 )
@@ -62,5 +62,5 @@ if errorlevel 1 (
 echo.
 echo Done. Check https://github.com/mumeinoapp/multicastdeck/releases
 echo The release was created as a Draft - open it, paste in the CHANGELOG.md
-echo v0.3.1 section as the description, then click "Publish release".
+echo v0.3.2 section as the description, then click "Publish release".
 pause
